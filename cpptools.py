@@ -287,13 +287,18 @@ class BufferedDocument:
 
 class DiagnosticPanel:
     OUTPUT_PANEL_NAME = "cpptools_panel"
+    panel: sublime.View = None
 
-    def __init__(self, window: sublime.Window, diagnostics_map: Dict[str, List[dict]]):
+    def __init__(self, window: sublime.Window):
         self.window = window
-        self.diagnostics_map = diagnostics_map
 
-    def create_output_panel(self) -> None:
-        """create output panel"""
+    def _create_panel(self):
+        self.panel = self.window.create_output_panel(self.OUTPUT_PANEL_NAME)
+        self.panel.settings().set("gutter", False)
+        self.panel.set_read_only(False)
+
+    def set_content(self, diagnostics_map: Dict[str, List[dict]]):
+        """set content with document mapped diagnostics"""
 
         message_buffer = StringIO()
 
@@ -312,19 +317,23 @@ class DiagnosticPanel:
                     f"{short_name}:{row}:{col}: {message} ({source})\n"
                 )
 
-        for file_name, diagnostics in self.diagnostics_map.items():
+        for file_name, diagnostics in diagnostics_map.items():
             build_message(file_name, diagnostics)
 
-        panel = self.window.create_output_panel(self.OUTPUT_PANEL_NAME)
-        panel.set_read_only(False)
-        panel.run_command(
+        if not self.panel:
+            self._create_panel()
+
+        # clear content
+        self.panel.run_command("select_all")
+        self.panel.run_command("left_delete")
+
+        self.panel.run_command(
             "append",
             {"characters": message_buffer.getvalue()},
         )
 
     def show(self) -> None:
         """show output panel"""
-        self.create_output_panel()
         self.window.run_command(
             "show_panel", {"panel": f"output.{self.OUTPUT_PANEL_NAME}"}
         )
@@ -350,9 +359,7 @@ class ClangdHandler(api.BaseHandler):
         self._initialized = False
         self.diagnostics_map = {}
 
-        self.diagnostics_panel = DiagnosticPanel(
-            self.active_window(), self.diagnostics_map
-        )
+        self.diagnostics_panel = DiagnosticPanel(self.active_window())
 
         self.hover_target: Optional[BufferedDocument] = None
         self.completion_target: Optional[BufferedDocument] = None
@@ -364,9 +371,6 @@ class ClangdHandler(api.BaseHandler):
         self.working_documents = {}
         self._initialized = False
         self.diagnostics_map = {}
-        self.diagnostics_panel = DiagnosticPanel(
-            self.active_window(), self.diagnostics_map
-        )
 
         # commands document target
         self.hover_target = None
@@ -484,6 +488,8 @@ class ClangdHandler(api.BaseHandler):
                 del self.diagnostics_map[file_name]
             except KeyError:
                 pass
+
+            self.diagnostics_panel.set_content(self.diagnostics_map)
             self.diagnostics_panel.show()
 
     @wait_initialized
@@ -562,6 +568,8 @@ class ClangdHandler(api.BaseHandler):
         diagnostics = params["diagnostics"]
 
         self.diagnostics_map[file_name] = diagnostics
+
+        self.diagnostics_panel.set_content(self.diagnostics_map)
         self.diagnostics_panel.show()
 
         if document := self.working_documents.get(file_name):
