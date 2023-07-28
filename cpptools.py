@@ -351,8 +351,8 @@ class ClangdHandler(api.BaseHandler):
         verbosity = "verbose" if LOGGER.level == logging.DEBUG else "error"
         server_command.append(f"--log={verbosity}")
 
-        self._transport = api.StandardIO(server_command)
-        self.client = api.Client(self._transport, self)
+        transport = api.StandardIO(server_command)
+        self.client = api.Client(transport, self)
 
         # workspace status
         self.working_documents: dict[str, BufferedDocument] = {}
