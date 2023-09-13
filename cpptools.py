@@ -456,6 +456,10 @@ class ClangdHandler(api.BaseHandler):
             return
 
         view = self.active_window().find_open_file(file_name)
+        if not view:
+            # buffer may be closed
+            return
+
         document = BufferedDocument(view)
         self.working_documents[file_name] = document
 
