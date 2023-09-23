@@ -896,22 +896,45 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
         if not valid_context(self.view, point):
             return
 
-        if (document := HANDLER.completion_target) and document.completion_ready():
-            show = False
-            word = self.view.word(self.prev_completion_loc)
-            if point == self.prev_completion_loc:
-                show = True
-                # this trick needed because clangd return completion after puctuation
-                if text := self.view.substr(word).strip():
-                    if text == "::":
-                        show = True
-                    elif ";" in text:
-                        show = False
-                    elif ":" in text:
-                        show = False
+        def is_show_after(word_str: str) -> bool:
+            if word_str.isspace() or word_str.isidentifier():
+                return True
 
-            elif self.view.substr(word).isidentifier() and point in word:
+            # we must modify the prefix because argument defined prefix
+            # only set if the prefix is identifier
+            prefix_region = sublime.Region(point - 2, point)
+            prefix = self.view.substr(prefix_region)
+
+            # accessor
+            if prefix.endswith("."):
+                return True
+            if prefix.endswith("->"):
+                return True
+            if prefix.endswith("::"):
+                return True
+
+            # prevent show completion after following puctuation
+            if prefix.endswith(":"):
+                return False
+            if prefix.endswith(";"):
+                return False
+
+            # else
+            return True
+
+        if (document := HANDLER.completion_target) and document.completion_ready():
+            word = self.view.word(self.prev_completion_loc)
+            word_str = self.view.substr(word).strip()
+
+            # point unchanged
+            if point == self.prev_completion_loc:
+                show = is_show_after(word_str)
+
+            # point changed but still in same word
+            elif word_str.isidentifier() and point in word:
                 show = True
+            else:
+                show = False
 
             if (cache := document.cached_completion) and show:
                 LOGGER.debug("show auto_complete")
