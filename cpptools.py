@@ -358,6 +358,7 @@ class ClangdHandler(api.BaseHandler):
 
         # workspace status
         self.working_documents: dict[str, BufferedDocument] = {}
+        self._initializing = False
         self._initialized = False
         self.diagnostics_map = {}
 
@@ -371,6 +372,7 @@ class ClangdHandler(api.BaseHandler):
 
     def _reset_state(self):
         self.working_documents = {}
+        self._initializing = False
         self._initialized = False
         self.diagnostics_map = {}
 
@@ -421,6 +423,11 @@ class ClangdHandler(api.BaseHandler):
         return sublime.active_window()
 
     def initialize(self, workspace_path: str):
+        # cancel if initializing
+        if self._initializing:
+            return
+
+        self._initializing = True
         self.client.send_request(
             "initialize",
             {
@@ -448,6 +455,7 @@ class ClangdHandler(api.BaseHandler):
             return
 
         self.client.send_notification("initialized", {})
+        self._initializing = False
         self._initialized = True
         self.initialized_event.set()
 
