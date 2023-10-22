@@ -389,6 +389,15 @@ class Workspace:
         self.diagnostics = {}
 
 
+@dataclass
+class ActionTarget:
+    hover: BufferedDocument = None
+    completion: BufferedDocument = None
+    formatting: BufferedDocument = None
+    definition: BufferedDocument = None
+    rename: BufferedDocument = None
+
+
 class ClangdHandler(api.BaseHandler):
     """"""
 
@@ -410,23 +419,15 @@ class ClangdHandler(api.BaseHandler):
 
         self.diagnostics_panel = DiagnosticPanel()
 
-        self.hover_target: Optional[BufferedDocument] = None
-        self.completion_target: Optional[BufferedDocument] = None
-        self.formatting_target: Optional[BufferedDocument] = None
-        self.definition_target: Optional[BufferedDocument] = None
-        self.rename_target: Optional[BufferedDocument] = None
+        # commands document target
+        self.action_target = ActionTarget()
 
     def _reset_state(self):
         self.workspace = Workspace()
         self._initializing = False
 
         # commands document target
-        self.hover_target = None
-        self.completion_target = None
-        self.formatting_target = None
-        self.definition_target = None
-        self.rename_target = None
-
+        self.action_target = ActionTarget()
         self.session.done()
 
     def ready(self) -> bool:
@@ -575,7 +576,7 @@ class ClangdHandler(api.BaseHandler):
                     "textDocument": {"uri": document.document_uri()},
                 },
             )
-            self.hover_target = document
+            self.action_target.hover = document
 
     def handle_textdocument_hover(self, params: dict):
         if err := params.get("error"):
@@ -589,7 +590,7 @@ class ClangdHandler(api.BaseHandler):
             except Exception:
                 pass
             else:
-                self.hover_target.show_popup(message, row, col)
+                self.action_target.hover.show_popup(message, row, col)
 
     @session.must_begin
     def textdocument_completion(self, file_name, row, col):
@@ -601,7 +602,7 @@ class ClangdHandler(api.BaseHandler):
                     "textDocument": {"uri": document.document_uri()},
                 },
             )
-            self.completion_target = document
+            self.action_target.completion = document
 
     def handle_textdocument_completion(self, params: dict):
         if err := params.get("error"):
@@ -613,7 +614,7 @@ class ClangdHandler(api.BaseHandler):
             except Exception:
                 pass
             else:
-                self.completion_target.show_completion(items)
+                self.action_target.completion.show_completion(items)
 
     def handle_textdocument_publishdiagnostics(self, params: dict):
         file_name = api.uri_to_path(params["uri"])
@@ -637,13 +638,13 @@ class ClangdHandler(api.BaseHandler):
                     "textDocument": {"uri": document.document_uri()},
                 },
             )
-            self.formatting_target = document
+            self.action_target.formatting = document
 
     def handle_textdocument_formatting(self, params: dict):
         if error := params.get("error"):
             print(error["message"])
         elif result := params.get("result"):
-            self.formatting_target.apply_text_changes(result)
+            self.action_target.formatting.apply_text_changes(result)
 
     @session.must_begin
     def textdocument_codeaction(
@@ -735,7 +736,7 @@ class ClangdHandler(api.BaseHandler):
                     "textDocument": {"uri": document.document_uri()},
                 },
             )
-            self.definition_target = document
+            self.action_target.definition = document
 
     @session.must_begin
     def textdocument_definition(self, file_name, row, col):
@@ -747,10 +748,10 @@ class ClangdHandler(api.BaseHandler):
                     "textDocument": {"uri": document.document_uri()},
                 },
             )
-            self.definition_target = document
+            self.action_target.definition = document
 
     def _open_locations(self, locations: List[dict]):
-        current_view = self.definition_target.view
+        current_view = self.action_target.definition.view
         current_sel = tuple(current_view.sel())
         visible_region = current_view.visible_region()
 
@@ -807,7 +808,7 @@ class ClangdHandler(api.BaseHandler):
                     "textDocument": {"uri": document.document_uri()},
                 },
             )
-            self.rename_target = document
+            self.action_target.rename = document
 
     @session.must_begin
     def textdocument_rename(self, new_name, row, col):
@@ -816,24 +817,26 @@ class ClangdHandler(api.BaseHandler):
             {
                 "newName": new_name,
                 "position": {"character": col, "line": row},
-                "textDocument": {"uri": self.rename_target.document_uri()},
+                "textDocument": {"uri": self.action_target.rename.document_uri()},
             },
         )
 
     def _input_rename(self, symbol_location: dict):
         start = symbol_location["start"]
-        start_point = self.rename_target.view.text_point(
+        start_point = self.action_target.rename.view.text_point(
             start["line"], start["character"]
         )
         end = symbol_location["end"]
-        end_point = self.rename_target.view.text_point(end["line"], end["character"])
+        end_point = self.action_target.rename.view.text_point(
+            end["line"], end["character"]
+        )
 
         def request_rename(new_name):
             self.textdocument_rename(new_name, start["line"], start["character"])
 
         self.active_window().show_input_panel(
             caption="rename",
-            initial_text=self.rename_target.view.substr(
+            initial_text=self.action_target.rename.view.substr(
                 sublime.Region(start_point, end_point)
             ),
             on_done=request_rename,
@@ -967,7 +970,9 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
             # else
             return True
 
-        if (document := HANDLER.completion_target) and document.completion_ready():
+        if (
+            document := HANDLER.action_target.completion
+        ) and document.completion_ready():
             word = self.view.word(self.prev_completion_loc)
             word_str = self.view.substr(word).strip()
 
