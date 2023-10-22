@@ -344,7 +344,46 @@ class DiagnosticPanel:
         sublime.active_window().destroy_output_panel(self.OUTPUT_PANEL_NAME)
 
 
+class Session:
+    def __init__(self):
+        self._begin = False
+        self._begin_event = threading.Event()
+
+    def is_ready(self):
+        return self._begin
+
+    def begin(self):
+        self._begin = True
+        self._begin_event.set()
+
+    def done(self):
+        self._begin = False
+        self._begin_event.clear()
+
+    def must_begin(self, func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if not self._begin:
+                return None
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    def wait_begin(self, func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            self._begin_event.wait()
+            return func(*args, **kwargs)
+
+        return wrapper
+
+
 class ClangdHandler(api.BaseHandler):
+    """"""
+
+    session = Session()
+
     def __init__(self):
         # client initializer
         server_command = ["clangd"]
@@ -358,7 +397,6 @@ class ClangdHandler(api.BaseHandler):
         # workspace status
         self.working_documents: dict[str, BufferedDocument] = {}
         self._initializing = False
-        self._initialized = False
         self.diagnostics_map = {}
 
         self.diagnostics_panel = DiagnosticPanel()
@@ -372,7 +410,6 @@ class ClangdHandler(api.BaseHandler):
     def _reset_state(self):
         self.working_documents = {}
         self._initializing = False
-        self._initialized = False
         self.diagnostics_map = {}
 
         # commands document target
@@ -382,18 +419,10 @@ class ClangdHandler(api.BaseHandler):
         self.definition_target = None
         self.rename_target = None
 
-    initialized_event = threading.Event()
-
-    def wait_initialized(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            ClangdHandler.initialized_event.wait()
-            return func(*args, **kwargs)
-
-        return wrapper
+        self.session.done()
 
     def ready(self) -> bool:
-        return self.client.server_running() and self._initialized
+        return self.client.server_running() and self.session.is_ready()
 
     run_server_lock = threading.Lock()
 
@@ -414,7 +443,6 @@ class ClangdHandler(api.BaseHandler):
 
     def terminate(self):
         """exit session"""
-        self.initialized_event.clear()
         self.client.terminate_server()
         self._reset_state()
 
@@ -455,10 +483,10 @@ class ClangdHandler(api.BaseHandler):
 
         self.client.send_notification("initialized", {})
         self._initializing = False
-        self._initialized = True
-        self.initialized_event.set()
 
-    @wait_initialized
+        self.session.begin()
+
+    @session.wait_begin
     def textdocument_didopen(self, file_name: str, *, reload: bool = False):
         if (not reload) and file_name in self.working_documents:
             return
@@ -509,7 +537,7 @@ class ClangdHandler(api.BaseHandler):
             self.diagnostics_panel.set_content(self.diagnostics_map)
             self.diagnostics_panel.show()
 
-    @wait_initialized
+    @session.must_begin
     def textdocument_didchange(self, file_name: str, changes: List[dict]):
         if document := self.working_documents.get(file_name):
             change_version = document.view.change_count()
@@ -529,7 +557,7 @@ class ClangdHandler(api.BaseHandler):
                 },
             )
 
-    @wait_initialized
+    @session.must_begin
     def textdocument_hover(self, file_name, row, col):
         if document := self.working_documents.get(file_name):
             self.client.send_request(
@@ -555,7 +583,7 @@ class ClangdHandler(api.BaseHandler):
             else:
                 self.hover_target.show_popup(message, row, col)
 
-    @wait_initialized
+    @session.must_begin
     def textdocument_completion(self, file_name, row, col):
         if document := self.working_documents.get(file_name):
             self.client.send_request(
@@ -591,7 +619,7 @@ class ClangdHandler(api.BaseHandler):
         if document := self.working_documents.get(file_name):
             document.highlight_text(diagnostics)
 
-    @wait_initialized
+    @session.must_begin
     def textdocument_formatting(self, file_name):
         if document := self.working_documents.get(file_name):
             self.client.send_request(
@@ -609,7 +637,7 @@ class ClangdHandler(api.BaseHandler):
         elif result := params.get("result"):
             self.formatting_target.apply_text_changes(result)
 
-    @wait_initialized
+    @session.must_begin
     def textdocument_codeaction(
         self, file_name, start_row, start_col, end_row, end_col
     ):
@@ -689,7 +717,7 @@ class ClangdHandler(api.BaseHandler):
 
         return None
 
-    @wait_initialized
+    @session.must_begin
     def textdocument_declaration(self, file_name, row, col):
         if document := self.working_documents.get(file_name):
             self.client.send_request(
@@ -701,7 +729,7 @@ class ClangdHandler(api.BaseHandler):
             )
             self.definition_target = document
 
-    @wait_initialized
+    @session.must_begin
     def textdocument_definition(self, file_name, row, col):
         if document := self.working_documents.get(file_name):
             self.client.send_request(
@@ -761,7 +789,7 @@ class ClangdHandler(api.BaseHandler):
         elif result := params.get("result"):
             self._open_locations(result)
 
-    @wait_initialized
+    @session.must_begin
     def textdocument_preparerename(self, file_name, row, col):
         if document := self.working_documents.get(file_name):
             self.client.send_request(
@@ -773,7 +801,7 @@ class ClangdHandler(api.BaseHandler):
             )
             self.rename_target = document
 
-    @wait_initialized
+    @session.must_begin
     def textdocument_rename(self, new_name, row, col):
         self.client.send_request(
             "textDocument/rename",
