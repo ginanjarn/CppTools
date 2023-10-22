@@ -69,7 +69,7 @@ class TextChange:
         return sublime.Region(self.region.a + move, self.region.b + move)
 
 
-DOCUMENT_CHAGE_EVENT = threading.Event()
+DOCUMENT_CHANGE_EVENT = threading.Event()
 
 
 class CpptoolsApplyTextChangesCommand(sublime_plugin.TextCommand):
@@ -81,7 +81,7 @@ class CpptoolsApplyTextChangesCommand(sublime_plugin.TextCommand):
             self.relocate_selection(current_sel, text_changes)
         finally:
             self.view.show(self.view.sel(), show_surrounds=False)
-            DOCUMENT_CHAGE_EVENT.set()
+            DOCUMENT_CHANGE_EVENT.set()
 
     def to_text_change(self, change: dict) -> TextChange:
         start = change["range"]["start"]
@@ -132,7 +132,7 @@ class UnbufferedDocument:
         try:
             self._apply_text_changes(changes)
         finally:
-            DOCUMENT_CHAGE_EVENT.set()
+            DOCUMENT_CHANGE_EVENT.set()
 
     def _apply_text_changes(self, changes: List[dict]):
         for change in changes:
@@ -663,14 +663,14 @@ class ClangdHandler(api.BaseHandler):
 
     def _apply_edit(self, edit: dict):
         for file_uri, changes in edit["changes"].items():
-            DOCUMENT_CHAGE_EVENT.clear()
+            DOCUMENT_CHANGE_EVENT.clear()
             file_name = api.uri_to_path(file_uri)
             document = self.working_documents.get(
                 file_name, UnbufferedDocument(file_name)
             )
             document.apply_text_changes(changes)
             # wait until changes applied
-            DOCUMENT_CHAGE_EVENT.wait()
+            DOCUMENT_CHANGE_EVENT.wait()
             document.save()
 
     def handle_workspace_applyedit(self, params: dict) -> dict:
