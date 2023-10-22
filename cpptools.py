@@ -379,6 +379,16 @@ class Session:
         return wrapper
 
 
+@dataclass
+class Workspace:
+    documents: Dict[str, BufferedDocument] = None
+    diagnostics: Dict[str, dict] = None
+
+    def __post_init__(self):
+        self.documents = {}
+        self.diagnostics = {}
+
+
 class ClangdHandler(api.BaseHandler):
     """"""
 
@@ -395,9 +405,8 @@ class ClangdHandler(api.BaseHandler):
         self.client = api.Client(transport, self)
 
         # workspace status
-        self.working_documents: dict[str, BufferedDocument] = {}
         self._initializing = False
-        self.diagnostics_map = {}
+        self.workspace = Workspace()
 
         self.diagnostics_panel = DiagnosticPanel()
 
@@ -408,9 +417,8 @@ class ClangdHandler(api.BaseHandler):
         self.rename_target: Optional[BufferedDocument] = None
 
     def _reset_state(self):
-        self.working_documents = {}
+        self.workspace = Workspace()
         self._initializing = False
-        self.diagnostics_map = {}
 
         # commands document target
         self.hover_target = None
@@ -488,7 +496,7 @@ class ClangdHandler(api.BaseHandler):
 
     @session.wait_begin
     def textdocument_didopen(self, file_name: str, *, reload: bool = False):
-        if (not reload) and file_name in self.working_documents:
+        if (not reload) and file_name in self.workspace.documents:
             return
 
         view = self.active_window().find_open_file(file_name)
@@ -497,7 +505,7 @@ class ClangdHandler(api.BaseHandler):
             return
 
         document = BufferedDocument(view)
-        self.working_documents[file_name] = document
+        self.workspace.documents[file_name] = document
 
         self.client.send_notification(
             "textDocument/didOpen",
@@ -512,7 +520,7 @@ class ClangdHandler(api.BaseHandler):
         )
 
     def textdocument_didsave(self, file_name: str):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             self.client.send_notification(
                 "textDocument/didSave",
                 {"textDocument": {"uri": document.document_uri()}},
@@ -523,23 +531,23 @@ class ClangdHandler(api.BaseHandler):
             self.textdocument_didopen(file_name)
 
     def textdocument_didclose(self, file_name: str):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             self.client.send_notification(
                 "textDocument/didClose",
                 {"textDocument": {"uri": document.document_uri()}},
             )
             try:
-                del self.working_documents[file_name]
-                del self.diagnostics_map[file_name]
+                del self.workspace.documents[file_name]
+                del self.workspace.diagnostics[file_name]
             except KeyError:
                 pass
 
-            self.diagnostics_panel.set_content(self.diagnostics_map)
+            self.diagnostics_panel.set_content(self.workspace.diagnostics)
             self.diagnostics_panel.show()
 
     @session.must_begin
     def textdocument_didchange(self, file_name: str, changes: List[dict]):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             change_version = document.view.change_count()
             if change_version <= document.version:
                 return
@@ -559,7 +567,7 @@ class ClangdHandler(api.BaseHandler):
 
     @session.must_begin
     def textdocument_hover(self, file_name, row, col):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             self.client.send_request(
                 "textDocument/hover",
                 {
@@ -585,7 +593,7 @@ class ClangdHandler(api.BaseHandler):
 
     @session.must_begin
     def textdocument_completion(self, file_name, row, col):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             self.client.send_request(
                 "textDocument/completion",
                 {
@@ -611,17 +619,17 @@ class ClangdHandler(api.BaseHandler):
         file_name = api.uri_to_path(params["uri"])
         diagnostics = params["diagnostics"]
 
-        self.diagnostics_map[file_name] = diagnostics
+        self.workspace.diagnostics[file_name] = diagnostics
 
-        self.diagnostics_panel.set_content(self.diagnostics_map)
+        self.diagnostics_panel.set_content(self.workspace.diagnostics)
         self.diagnostics_panel.show()
 
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             document.highlight_text(diagnostics)
 
     @session.must_begin
     def textdocument_formatting(self, file_name):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             self.client.send_request(
                 "textDocument/formatting",
                 {
@@ -641,12 +649,12 @@ class ClangdHandler(api.BaseHandler):
     def textdocument_codeaction(
         self, file_name, start_row, start_col, end_row, end_col
     ):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             self.client.send_request(
                 "textDocument/codeAction",
                 {
                     "context": {
-                        "diagnostics": self.diagnostics_map.get(file_name, []),
+                        "diagnostics": self.workspace.diagnostics.get(file_name, []),
                         "triggerKind": 2,
                     },
                     "range": {
@@ -692,7 +700,7 @@ class ClangdHandler(api.BaseHandler):
         for file_uri, changes in edit["changes"].items():
             DOCUMENT_CHANGE_EVENT.clear()
             file_name = api.uri_to_path(file_uri)
-            document = self.working_documents.get(
+            document = self.workspace.documents.get(
                 file_name, UnbufferedDocument(file_name)
             )
             document.apply_text_changes(changes)
@@ -719,7 +727,7 @@ class ClangdHandler(api.BaseHandler):
 
     @session.must_begin
     def textdocument_declaration(self, file_name, row, col):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             self.client.send_request(
                 "textDocument/declaration",
                 {
@@ -731,7 +739,7 @@ class ClangdHandler(api.BaseHandler):
 
     @session.must_begin
     def textdocument_definition(self, file_name, row, col):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             self.client.send_request(
                 "textDocument/definition",
                 {
@@ -791,7 +799,7 @@ class ClangdHandler(api.BaseHandler):
 
     @session.must_begin
     def textdocument_preparerename(self, file_name, row, col):
-        if document := self.working_documents.get(file_name):
+        if document := self.workspace.documents.get(file_name):
             self.client.send_request(
                 "textDocument/prepareRename",
                 {
