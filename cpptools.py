@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import wraps
 from io import StringIO
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 
 import sublime
@@ -381,12 +381,22 @@ class Session:
 
 @dataclass
 class Workspace:
-    documents: Dict[str, BufferedDocument] = None
+    documents: Dict[sublime.View, BufferedDocument] = None
     diagnostics: Dict[str, dict] = None
 
     def __post_init__(self):
         self.documents = {}
         self.diagnostics = {}
+
+    def get_document_by_name(
+        self, file_name: str, /, default: Any = None
+    ) -> Optional[BufferedDocument]:
+        """get document by name"""
+
+        for view, document in self.documents.items():
+            if view.file_name() == file_name:
+                return document
+        return default
 
 
 @dataclass
@@ -458,10 +468,16 @@ class ClangdHandler(api.BaseHandler):
     def active_window(self) -> sublime.Window:
         return sublime.active_window()
 
-    def initialize(self, workspace_path: str):
+    def initialize(self, view: sublime.View):
         # cancel if initializing
         if self._initializing:
             return
+
+        # check if view not closed
+        if view is None:
+            return
+
+        workspace_path = get_workspace_path(view)
 
         self._initializing = True
         self.client.send_request(
@@ -496,17 +512,16 @@ class ClangdHandler(api.BaseHandler):
         self.session.begin()
 
     @session.wait_begin
-    def textdocument_didopen(self, file_name: str, *, reload: bool = False):
-        if (not reload) and file_name in self.workspace.documents:
+    def textdocument_didopen(self, view: sublime.View, *, reload: bool = False):
+        # check if view not closed
+        if view is None:
             return
 
-        view = self.active_window().find_open_file(file_name)
-        if not view:
-            # buffer may be closed
+        if (view in self.workspace.documents) and (not reload):
             return
 
         document = BufferedDocument(view)
-        self.workspace.documents[file_name] = document
+        self.workspace.documents[view] = document
 
         self.client.send_notification(
             "textDocument/didOpen",
@@ -520,8 +535,8 @@ class ClangdHandler(api.BaseHandler):
             },
         )
 
-    def textdocument_didsave(self, file_name: str):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_didsave(self, view: sublime.View):
+        if document := self.workspace.documents.get(view):
             self.client.send_notification(
                 "textDocument/didSave",
                 {"textDocument": {"uri": document.document_uri()}},
@@ -529,16 +544,17 @@ class ClangdHandler(api.BaseHandler):
 
         else:
             # untitled document not yet loaded to server
-            self.textdocument_didopen(file_name)
+            self.textdocument_didopen(view)
 
-    def textdocument_didclose(self, file_name: str):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_didclose(self, view: sublime.View):
+        file_name = view.file_name()
+        if document := self.workspace.documents.get(view):
             self.client.send_notification(
                 "textDocument/didClose",
                 {"textDocument": {"uri": document.document_uri()}},
             )
             try:
-                del self.workspace.documents[file_name]
+                del self.workspace.documents[view]
                 del self.workspace.diagnostics[file_name]
             except KeyError:
                 pass
@@ -547,8 +563,8 @@ class ClangdHandler(api.BaseHandler):
             self.diagnostics_panel.show()
 
     @session.must_begin
-    def textdocument_didchange(self, file_name: str, changes: List[dict]):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_didchange(self, view: sublime.View, changes: List[dict]):
+        if document := self.workspace.documents.get(view):
             change_version = document.view.change_count()
             if change_version <= document.version:
                 return
@@ -567,8 +583,8 @@ class ClangdHandler(api.BaseHandler):
             )
 
     @session.must_begin
-    def textdocument_hover(self, file_name, row, col):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_hover(self, view, row, col):
+        if document := self.workspace.documents.get(view):
             self.client.send_request(
                 "textDocument/hover",
                 {
@@ -593,8 +609,8 @@ class ClangdHandler(api.BaseHandler):
                 self.action_target.hover.show_popup(message, row, col)
 
     @session.must_begin
-    def textdocument_completion(self, file_name, row, col):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_completion(self, view, row, col):
+        if document := self.workspace.documents.get(view):
             self.client.send_request(
                 "textDocument/completion",
                 {
@@ -625,12 +641,12 @@ class ClangdHandler(api.BaseHandler):
         self.diagnostics_panel.set_content(self.workspace.diagnostics)
         self.diagnostics_panel.show()
 
-        if document := self.workspace.documents.get(file_name):
+        if document := self.workspace.get_document_by_name(file_name):
             document.highlight_text(diagnostics)
 
     @session.must_begin
-    def textdocument_formatting(self, file_name):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_formatting(self, view):
+        if document := self.workspace.documents.get(view):
             self.client.send_request(
                 "textDocument/formatting",
                 {
@@ -647,10 +663,9 @@ class ClangdHandler(api.BaseHandler):
             self.action_target.formatting.apply_text_changes(result)
 
     @session.must_begin
-    def textdocument_codeaction(
-        self, file_name, start_row, start_col, end_row, end_col
-    ):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_codeaction(self, view, start_row, start_col, end_row, end_col):
+        file_name = view.file_name()
+        if document := self.workspace.documents.get(view):
             self.client.send_request(
                 "textDocument/codeAction",
                 {
@@ -701,7 +716,7 @@ class ClangdHandler(api.BaseHandler):
         for file_uri, changes in edit["changes"].items():
             DOCUMENT_CHANGE_EVENT.clear()
             file_name = api.uri_to_path(file_uri)
-            document = self.workspace.documents.get(
+            document = self.workspace.get_document_by_name(
                 file_name, UnbufferedDocument(file_name)
             )
             document.apply_text_changes(changes)
@@ -727,8 +742,8 @@ class ClangdHandler(api.BaseHandler):
         return None
 
     @session.must_begin
-    def textdocument_declaration(self, file_name, row, col):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_declaration(self, view, row, col):
+        if document := self.workspace.documents.get(view):
             self.client.send_request(
                 "textDocument/declaration",
                 {
@@ -739,8 +754,8 @@ class ClangdHandler(api.BaseHandler):
             self.action_target.definition = document
 
     @session.must_begin
-    def textdocument_definition(self, file_name, row, col):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_definition(self, view, row, col):
+        if document := self.workspace.documents.get(view):
             self.client.send_request(
                 "textDocument/definition",
                 {
@@ -799,8 +814,8 @@ class ClangdHandler(api.BaseHandler):
             self._open_locations(result)
 
     @session.must_begin
-    def textdocument_preparerename(self, file_name, row, col):
-        if document := self.workspace.documents.get(file_name):
+    def textdocument_preparerename(self, view, row, col):
+        if document := self.workspace.documents.get(view):
             self.client.send_request(
                 "textDocument/prepareRename",
                 {
@@ -912,20 +927,16 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
             if HANDLER.ready():
                 # on multi column layout, sometime we hover on other document which may
                 # not loaded yet
-                HANDLER.textdocument_didopen(file_name)
+                HANDLER.textdocument_didopen(view)
                 # request on hover
-                HANDLER.textdocument_hover(file_name, row, col)
+                HANDLER.textdocument_hover(view, row, col)
             else:
                 # initialize server
                 HANDLER.run_server()
 
-                # in some case, view is closed while exec 'run_server()'
-                if not view:
-                    return
-
-                HANDLER.initialize(get_workspace_path(view))
-                HANDLER.textdocument_didopen(file_name)
-                HANDLER.textdocument_hover(file_name, row, col)
+                HANDLER.initialize(view)
+                HANDLER.textdocument_didopen(view)
+                HANDLER.textdocument_hover(view, row, col)
 
         except api.ServerNotRunning:
             pass
@@ -1008,7 +1019,7 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
 
     def _on_query_completions(self, view, file_name, row, col):
         if HANDLER.ready():
-            HANDLER.textdocument_completion(file_name, row, col)
+            HANDLER.textdocument_completion(view, row, col)
 
     def on_activated_async(self):
         # check point in valid source
@@ -1017,12 +1028,13 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
 
         file_name = self.view.file_name()
         if HANDLER.ready():
-            HANDLER.textdocument_didopen(file_name)
+            HANDLER.textdocument_didopen(self.view)
 
             # Close older document if renamed.
             # SublimeText only rename the 'file_name' but 'View' didn't closed.
             if (prev_name := self.prev_file_name) and prev_name != file_name:
-                HANDLER.textdocument_didclose(prev_name)
+                HANDLER.textdocument_didclose(self.view)
+                HANDLER.textdocument_didopen(self.view, reload=True)
 
             self.prev_file_name = file_name
 
@@ -1034,12 +1046,8 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
                 # initialize server
                 HANDLER.run_server()
 
-                # in some case, view is closed while exec 'run_server()'
-                if not self.view:
-                    return
-
-                HANDLER.initialize(get_workspace_path(self.view))
-                HANDLER.textdocument_didopen(file_name)
+                HANDLER.initialize(self.view)
+                HANDLER.textdocument_didopen(self.view)
 
             except api.ServerNotRunning:
                 pass
@@ -1050,7 +1058,7 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
             return
 
         if HANDLER.ready():
-            HANDLER.textdocument_didsave(self.view.file_name())
+            HANDLER.textdocument_didsave(self.view)
 
     def on_close(self):
         # check point in valid source
@@ -1058,7 +1066,7 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
             return
 
         if HANDLER.ready():
-            HANDLER.textdocument_didclose(self.view.file_name())
+            HANDLER.textdocument_didclose(self.view)
 
     def on_load(self):
         # check point in valid source
@@ -1066,7 +1074,7 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
             return
 
         if HANDLER.ready():
-            HANDLER.textdocument_didopen(self.view.file_name(), reload=True)
+            HANDLER.textdocument_didopen(self.view, reload=True)
 
     def on_reload(self):
         # check point in valid source
@@ -1074,7 +1082,7 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
             return
 
         if HANDLER.ready():
-            HANDLER.textdocument_didopen(self.view.file_name(), reload=True)
+            HANDLER.textdocument_didopen(self.view, reload=True)
 
     def on_revert(self):
         # check point in valid source
@@ -1082,18 +1090,20 @@ class ViewEventListener(sublime_plugin.ViewEventListener):
             return
 
         if HANDLER.ready():
-            HANDLER.textdocument_didopen(self.view.file_name(), reload=True)
+            HANDLER.textdocument_didopen(self.view, reload=True)
 
 
 class TextChangeListener(sublime_plugin.TextChangeListener):
     def on_text_changed(self, changes: List[sublime.TextChange]):
+        view = self.buffer.primary_view()
+
         # check point in valid source
-        if not valid_context(self.buffer.primary_view(), 0):
+        if not valid_context(view, 0):
             return
 
-        if (file_name := self.buffer.file_name()) and HANDLER.ready():
+        if HANDLER.ready():
             HANDLER.textdocument_didchange(
-                file_name, [self.change_as_rpc(c) for c in changes]
+                view, [self.change_as_rpc(c) for c in changes]
             )
 
     @staticmethod
@@ -1112,9 +1122,8 @@ class TextChangeListener(sublime_plugin.TextChangeListener):
 
 class CpptoolsDocumentFormattingCommand(sublime_plugin.TextCommand):
     def run(self, edit: sublime.Edit):
-        file_name = self.view.file_name()
         if HANDLER.ready():
-            HANDLER.textdocument_formatting(file_name)
+            HANDLER.textdocument_formatting(self.view)
 
     def is_visible(self):
         return valid_context(self.view, 0)
@@ -1122,13 +1131,12 @@ class CpptoolsDocumentFormattingCommand(sublime_plugin.TextCommand):
 
 class CpptoolsCodeActionCommand(sublime_plugin.TextCommand):
     def run(self, edit: sublime.Edit):
-        file_name = self.view.file_name()
         cursor = self.view.sel()[0]
         if HANDLER.ready():
             start_row, start_col = self.view.rowcol(cursor.a)
             end_row, end_col = self.view.rowcol(cursor.b)
             HANDLER.textdocument_codeaction(
-                file_name, start_row, start_col, end_row, end_col
+                self.view, start_row, start_col, end_row, end_col
             )
 
     def is_visible(self):
@@ -1137,12 +1145,11 @@ class CpptoolsCodeActionCommand(sublime_plugin.TextCommand):
 
 class CpptoolsGotoDefinitionCommand(sublime_plugin.TextCommand):
     def run(self, edit: sublime.Edit, event: Optional[dict] = None):
-        file_name = self.view.file_name()
         cursor = self.view.sel()[0]
         point = event["text_point"] if event else cursor.a
         if HANDLER.ready():
             start_row, start_col = self.view.rowcol(point)
-            HANDLER.textdocument_definition(file_name, start_row, start_col)
+            HANDLER.textdocument_definition(self.view, start_row, start_col)
 
     def is_visible(self):
         return valid_context(self.view, 0)
@@ -1153,12 +1160,11 @@ class CpptoolsGotoDefinitionCommand(sublime_plugin.TextCommand):
 
 class CpptoolsGotoDeclarationCommand(sublime_plugin.TextCommand):
     def run(self, edit: sublime.Edit, event: Optional[dict] = None):
-        file_name = self.view.file_name()
         cursor = self.view.sel()[0]
         point = event["text_point"] if event else cursor.a
         if HANDLER.ready():
             start_row, start_col = self.view.rowcol(point)
-            HANDLER.textdocument_declaration(file_name, start_row, start_col)
+            HANDLER.textdocument_declaration(self.view, start_row, start_col)
 
     def is_visible(self):
         return valid_context(self.view, 0)
@@ -1169,7 +1175,6 @@ class CpptoolsGotoDeclarationCommand(sublime_plugin.TextCommand):
 
 class CpptoolsRenameCommand(sublime_plugin.TextCommand):
     def run(self, edit: sublime.Edit, event: Optional[dict] = None):
-        file_name = self.view.file_name()
         cursor = self.view.sel()[0]
         point = event["text_point"] if event else cursor.a
         if HANDLER.ready():
@@ -1178,7 +1183,7 @@ class CpptoolsRenameCommand(sublime_plugin.TextCommand):
             self.view.sel().add(point)
 
             start_row, start_col = self.view.rowcol(point)
-            HANDLER.textdocument_preparerename(file_name, start_row, start_col)
+            HANDLER.textdocument_preparerename(self.view, start_row, start_col)
 
     def is_visible(self):
         return valid_context(self.view, 0)
