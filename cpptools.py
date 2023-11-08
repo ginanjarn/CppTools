@@ -313,8 +313,13 @@ class DiagnosticPanel:
                     f"{short_name}:{row}:{col}: {message} ({source})\n"
                 )
 
-        for file_name, diagnostics in diagnostics_map.items():
-            build_message(file_name, diagnostics)
+        try:
+            for file_name, diagnostics in diagnostics_map.items():
+                build_message(file_name, diagnostics)
+
+        except RuntimeError:
+            # maybe dictionary changed during iteration
+            return
 
         if not (self.panel and self.panel.is_valid()):
             self._create_panel()
