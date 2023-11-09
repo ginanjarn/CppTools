@@ -169,7 +169,6 @@ class UnbufferedDocument:
 class BufferedDocument:
     def __init__(self, view: sublime.View):
         self.view = view
-        self.version = 0
 
         self.file_name = self.view.file_name()
         self._cached_completion = None
@@ -179,6 +178,10 @@ class BufferedDocument:
     def _add_view_settings(self):
         self.view.settings().set("show_definitions", False)
         self.view.settings().set("auto_complete_use_index", False)
+
+    @property
+    def version(self) -> int:
+        return self.view.change_count()
 
     @property
     def text(self):
@@ -593,12 +596,6 @@ class ClangdHandler(api.BaseHandler):
         # document can be related to multiple View but has same file_name
         file_name = view.file_name()
         if document := self.workspace.get_document_by_name(file_name):
-            change_version = document.view.change_count()
-            if change_version <= document.version:
-                return
-
-            document.version = change_version
-
             self.client.send_notification(
                 "textDocument/didChange",
                 {
