@@ -293,7 +293,8 @@ class DiagnosticPanel:
 
     def _create_panel(self):
         self.panel = sublime.active_window().create_output_panel(self.OUTPUT_PANEL_NAME)
-        self.panel.settings().set("gutter", False)
+        settings = {"gutter": False, "word_wrap": False}
+        self.panel.settings().update(settings)
         self.panel.set_read_only(False)
 
     def set_content(self, diagnostics_map: Dict[str, List[dict]]):
