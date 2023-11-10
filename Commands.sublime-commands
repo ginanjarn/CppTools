@@ -1,0 +1,18 @@
+[
+	{
+		"caption" : "Format Code",
+		"command" : "cpptools_document_formatting",
+	},
+	{
+		"caption" : "Show Definition",
+		"command" : "cpptools_goto_definition",
+	},
+	{
+		"caption" : "Code Action",
+		"command" : "cpptools_code_action",
+	},
+	{
+		"caption" : "Rename symbol...",
+		"command" : "cpptools_rename",
+	}
+]
