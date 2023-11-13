@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import wraps
@@ -185,9 +186,9 @@ class BufferedDocument:
 
     @property
     def text(self):
-        if self.view.is_loading():
-            # read from file
-            return Path(self.file_name).read_text()
+        # wait until complete loaded
+        while self.view.is_loading():
+            time.sleep(0.5)
 
         return self.view.substr(sublime.Region(0, self.view.size()))
 
