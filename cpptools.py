@@ -532,7 +532,7 @@ class ClangdHandler(api.BaseHandler):
     @session.wait_begin
     def textdocument_didopen(self, view: sublime.View, *, reload: bool = False):
         # check if view not closed
-        if view is None:
+        if not view.is_valid():
             return
 
         if (view in self.workspace.documents) and (not reload):
