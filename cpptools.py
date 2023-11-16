@@ -563,20 +563,29 @@ class ClangdHandler(api.BaseHandler):
     @session.wait_begin
     def textdocument_didopen(self, view: sublime.View, *, reload: bool = False):
         # check if view not closed
-        if not view.is_valid():
-            return
-
-        if (view in self.workspace.documents) and (not reload):
+        if not (view and view.is_valid()):
             return
 
         file_name = view.file_name()
-        other = self.workspace.get_documents(file_name)
+
+        if opened_document := self.workspace.get_document(view):
+            if opened_document.file_name == file_name and (not reload):
+                return
+
+            # In Sublime Text, rename file only retarget to new file
+            # but the view is not closed.
+            # Close older document then reopen with new name.
+            self.textdocument_didclose(view)
+
+        # document may open in other views
+        other_documents = self.workspace.get_documents(file_name)
 
         document = BufferedDocument(view)
         self.workspace.set_document(view, document)
 
         # if document has opened in other View
-        if other:
+        if other_documents:
+            LOGGER.debug("%s has opened in %s", file_name, other_documents)
             return
 
         self.client.send_notification(
