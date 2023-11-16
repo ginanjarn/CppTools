@@ -942,11 +942,9 @@ def plugin_unloaded():
 
 
 def valid_context(view: sublime.View, point: int):
-    if view.match_selector(point, "source.c++"):
-        return True
-    if view.match_selector(point, "source.c"):
-        return True
-    return False
+    if not (view and view.is_valid()):
+        return False
+    return view.match_selector(point, "source.c,source.c++")
 
 
 def get_workspace_path(view: sublime.View) -> str:
