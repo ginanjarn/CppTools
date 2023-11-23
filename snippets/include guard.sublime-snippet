@@ -1,0 +1,14 @@
+<snippet>
+	<content><![CDATA[
+#ifndef ${1:${TM_FILENAME/\.h(?:pp)?//}_H}
+#define ${1:${TM_FILENAME/\.h(?:pp)?//}_H}
+
+${0:// declarations}
+
+#endif // ${1:${TM_FILENAME/\.h(?:pp)?//}_H}
+]]></content>
+	<!-- Optional: Set a tabTrigger to define how to trigger the snippet -->
+	<tabTrigger>#ifndef</tabTrigger>
+	<!-- Optional: Set a scope to limit where the snippet will trigger -->
+	<scope>source.c,source.c++</scope>
+</snippet>
