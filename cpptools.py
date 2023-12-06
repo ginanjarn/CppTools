@@ -391,71 +391,81 @@ class Session:
 class Workspace:
     def __init__(self):
         self.documents: Dict[sublime.View, BufferedDocument] = {}
-        self.diagnostics: Dict[PathStr, dict] = {}
+        self.diagnostics: Dict[str, dict] = {}
 
-        self.document_lock = threading.Lock()
-        self.diagnostic_lock = threading.RLock()
+    document_lock = threading.Lock()
+    diagnostic_lock = threading.RLock()
 
+    def lock(locker: threading.Lock):
+        def wrapper1(func):
+            @wraps(func)
+            def wrapper2(*args, **kwargs):
+                with locker:
+                    return func(*args, **kwargs)
+
+            return wrapper2
+
+        return wrapper1
+
+    @lock(document_lock)
     def get_document(
         self, view: sublime.View, /, default: Any = None
     ) -> Optional[BufferedDocument]:
         return self.documents.get(view, default)
 
+    @lock(document_lock)
     def set_document(self, view: sublime.View, document: BufferedDocument):
-        with self.document_lock:
-            self.documents[view] = document
+        self.documents[view] = document
 
+    @lock(document_lock)
     def remove_document(self, view: sublime.View):
-        with self.document_lock:
-            try:
-                del self.documents[view]
-            except KeyError as err:
-                LOGGER.debug("document not found %s", err)
-                pass
+        try:
+            del self.documents[view]
+        except KeyError as err:
+            LOGGER.debug("document not found %s", err)
+            pass
 
+    @lock(document_lock)
     def get_document_by_name(
         self, file_name: PathStr, /, default: Any = None
     ) -> Optional[BufferedDocument]:
         """get document by name"""
 
-        with self.document_lock:
-            for view, document in self.documents.items():
-                if view.file_name() == file_name:
-                    return document
-            return default
+        for view, document in self.documents.items():
+            if view.file_name() == file_name:
+                return document
+        return default
 
+    @lock(document_lock)
     def get_documents(
         self, file_name: Optional[PathStr] = None
     ) -> List[BufferedDocument]:
         """get documents.
         If file_name assigned, return documents with file_name filtered.
         """
-        with self.document_lock:
-            if not file_name:
-                return [doc for _, doc in self.documents.items()]
-            return [
-                doc for _, doc in self.documents.items() if doc.file_name == file_name
-            ]
+        if not file_name:
+            return [doc for _, doc in self.documents.items()]
+        return [doc for _, doc in self.documents.items() if doc.file_name == file_name]
 
+    @lock(diagnostic_lock)
     def get_diagnostic(self, file_name: PathStr) -> Dict[str, Any]:
-        with self.diagnostic_lock:
-            return self.diagnostics.get(file_name)
+        return self.diagnostics.get(file_name)
 
+    @lock(diagnostic_lock)
     def get_diagnostics(self) -> Dict[PathStr, Dict[str, Any]]:
-        with self.diagnostic_lock:
-            return self.diagnostics
+        return self.diagnostics
 
-    def set_diagnostic(self, file_name: PathStr, diagnostic: Dict[str, Any]):
-        with self.diagnostic_lock:
-            self.diagnostics[file_name] = diagnostic
+    @lock(diagnostic_lock)
+    def set_diagnostic(self, file_name: PathStr, diagnostic: dict):
+        self.diagnostics[file_name] = diagnostic
 
+    @lock(diagnostic_lock)
     def remove_diagnostic(self, file_name: PathStr):
-        with self.diagnostic_lock:
-            try:
-                del self.diagnostics[file_name]
-            except KeyError as err:
-                LOGGER.debug("diagnostic not found %s", err)
-                pass
+        try:
+            del self.diagnostics[file_name]
+        except KeyError as err:
+            LOGGER.debug("diagnostic not found %s", err)
+            pass
 
 
 @dataclass
