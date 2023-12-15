@@ -302,29 +302,7 @@ class DiagnosticPanel:
         self.panel.settings().update(settings)
         self.panel.set_read_only(False)
 
-    def set_content(self, diagnostics_map: Dict[str, List[dict]]):
-        """set content with document mapped diagnostics"""
-
-        message_buffer = StringIO()
-
-        def build_message(file_name: PathStr, diagnostics: List[Dict[str, Any]]):
-            for diagnostic in diagnostics:
-                short_name = Path(file_name).name
-                row = diagnostic["range"]["start"]["line"]
-                col = diagnostic["range"]["start"]["character"]
-                message = diagnostic["message"]
-                source = diagnostic.get("source", "")
-
-                # natural line index start with 1
-                row += 1
-
-                message_buffer.write(
-                    f"{short_name}:{row}:{col}: {message} ({source})\n"
-                )
-
-        for file_name, diagnostics in diagnostics_map.items():
-            build_message(file_name, diagnostics)
-
+    def set_content(self, text: str):
         if not (self.panel and self.panel.is_valid()):
             self._create_panel()
 
@@ -339,7 +317,7 @@ class DiagnosticPanel:
 
         self.panel.run_command(
             "append",
-            {"characters": message_buffer.getvalue()},
+            {"characters": text},
         )
 
     def show(self) -> None:
@@ -642,7 +620,10 @@ class ClangdHandler(api.BaseHandler):
 
             self.workspace.remove_diagnostic(file_name)
 
-            self.diagnostics_panel.set_content(self.workspace.get_diagnostics())
+            diagnostic_text = self._build_message(
+                self.workspace.get_diagnostics()
+            )
+            self.diagnostics_panel.set_content(diagnostic_text)
             self.diagnostics_panel.show()
 
             self.client.send_notification(
@@ -716,18 +697,45 @@ class ClangdHandler(api.BaseHandler):
             else:
                 self.action_target.completion.show_completion(items)
 
+    def _build_message(self, diagnostics_map: Dict[PathStr, Any]) -> str:
+        message_buffer = StringIO()
+
+        def build_message(file_name: PathStr, diagnostics: List[Dict[str, Any]]):
+            for diagnostic in diagnostics:
+                short_name = Path(file_name).name
+                row = diagnostic["range"]["start"]["line"]
+                col = diagnostic["range"]["start"]["character"]
+                message = diagnostic["message"]
+                source = diagnostic.get("source", "")
+
+                # natural line index start with 1
+                row += 1
+
+                yield f"{short_name}:{row}:{col}: {message} ({source})\n"
+
+        for file_name, diagnostics in diagnostics_map.items():
+            lines = build_message(file_name, diagnostics)
+            message_buffer.writelines(lines)
+
+        return message_buffer.getvalue()
+
     def handle_textdocument_publishdiagnostics(self, params: dict):
         file_name = api.uri_to_path(params["uri"])
         diagnostics = params["diagnostics"]
 
-        with self.workspace.diagnostic_lock:
-            self.workspace.set_diagnostic(file_name, diagnostics)
+        diagnostic_text = ""
+        self.workspace.set_diagnostic(file_name, diagnostics)
 
-            self.diagnostics_panel.set_content(self.workspace.diagnostics)
-            self.diagnostics_panel.show()
+        with self.workspace.diagnostic_lock:
+            diagnostic_text = self._build_message(
+                self.workspace.get_diagnostics()
+            )
 
             for document in self.workspace.get_documents(file_name):
                 document.highlight_text(diagnostics)
+
+        self.diagnostics_panel.set_content(diagnostic_text)
+        self.diagnostics_panel.show()
 
     @session.must_begin
     def textdocument_formatting(self, view):
