@@ -198,7 +198,7 @@ class StandardIO(Transport):
         # ready to call 'Popen()' object
         self._run_event.set()
 
-        thread = threading.Thread(target=self.listen_stderr, daemon=True)
+        thread = threading.Thread(target=self.listen_stderr)
         thread.start()
 
     @property
