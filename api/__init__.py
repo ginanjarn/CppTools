@@ -293,16 +293,46 @@ class StandardIO(Transport):
         return content
 
 
+class RequestData:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.request_map = {}
+        self.canceled_request = set()
+        self.request_count = 0
+
+    def add_request(self, method: str):
+        with self.lock:
+            self.request_count += 1
+            self.request_map[self.request_count] = method
+
+    def add_canceled_request(self, *request_id: int):
+        with self.lock:
+            self.canceled_request.update(set(request_id))
+
+    def is_canceled(self, request_id: int) -> bool:
+        with self.lock:
+            return request_id in self.canceled_request
+
+    def remove(self, request_id: int):
+        with self.lock:
+            # both request_map and canceled_request key must removed
+            try:
+                del self.request_map[request_id]
+            except KeyError:
+                pass
+
+            try:
+                self.canceled_request.remove(request_id)
+            except KeyError:
+                pass
+
+
 class Client:
     def __init__(self, transport: Transport, handler: BaseHandler):
         self._transport = weakref.ref(transport, lambda x: self._reset_state())
         self._handler = weakref.ref(handler, lambda x: self._reset_state())
 
-        self._request_map_lock = threading.Lock()
-
-        self._request_map = {}
-        self._canceled_requests = set()
-        self._temp_request_id = -1
+        self.request_data = RequestData()
 
     @property
     def transport(self):
@@ -313,14 +343,7 @@ class Client:
         return self._handler()
 
     def _reset_state(self):
-        with self._request_map_lock:
-            self._request_map = {}
-            self._canceled_requests = set()
-            self._temp_request_id = -1
-
-    def new_request_id(self) -> int:
-        self._temp_request_id += 1
-        return self._temp_request_id
+        self.request_data = RequestData()
 
     def send_message(self, message: RPCMessage):
         content = message.dumps(as_bytes=True)
@@ -408,29 +431,29 @@ class Client:
             LOGGER.debug(err, exc_info=True)
 
     def handle_response(self, message: RPCMessage):
-        with self._request_map_lock:
-            method = self._request_map.pop(message["id"], "unknown")
+        # check if request canceled
+        if self.request_data.is_canceled(message["id"]):
+            self.request_data.remove(message["id"])
+            return
 
-            # check if request canceled
-            if message["id"] in self._canceled_requests:
-                self._canceled_requests.remove(message["id"])
-                return
-
-            try:
-                self.handler.handle(method, message)
-            except Exception as err:
-                LOGGER.debug(err, exc_info=True)
+        method = self.request_data.request_map.pop(message["id"], "unknown")
+        try:
+            self.handler.handle(method, message)
+        except Exception as err:
+            LOGGER.exception(err, exc_info=True)
 
     def send_request(self, method: str, params: dict):
-        with self._request_map_lock:
-            # cancel previous request
-            for req_id, meth in self._request_map.items():
-                if meth == method:
-                    self._canceled_requests.add(req_id)
+        with self.request_data.lock:
+            duplicated = [
+                id_
+                for id_, meth in self.request_data.request_map.items()
+                if meth == method
+            ]
+            self.request_data.add_canceled_request(*duplicated)
 
-            req_id = self.new_request_id()
-            self.send_message(RPCMessage.request(req_id, method, params))
-            self._request_map[req_id] = method
+        self.request_data.add_request(method)
+        req_id = self.request_data.request_count
+        self.send_message(RPCMessage.request(req_id, method, params))
 
     def send_notification(self, method: str, params: dict):
         self.send_message(RPCMessage.notification(method, params))
