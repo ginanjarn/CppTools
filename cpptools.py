@@ -620,9 +620,7 @@ class ClangdHandler(api.BaseHandler):
 
             self.workspace.remove_diagnostic(file_name)
 
-            diagnostic_text = self._build_message(
-                self.workspace.get_diagnostics()
-            )
+            diagnostic_text = self._build_message(self.workspace.get_diagnostics())
             self.diagnostics_panel.set_content(diagnostic_text)
             self.diagnostics_panel.show()
 
@@ -727,9 +725,7 @@ class ClangdHandler(api.BaseHandler):
         self.workspace.set_diagnostic(file_name, diagnostics)
 
         with self.workspace.diagnostic_lock:
-            diagnostic_text = self._build_message(
-                self.workspace.get_diagnostics()
-            )
+            diagnostic_text = self._build_message(self.workspace.get_diagnostics())
 
             for document in self.workspace.get_documents(file_name):
                 document.highlight_text(diagnostics)
