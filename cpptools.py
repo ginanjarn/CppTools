@@ -467,8 +467,8 @@ class ClangdHandler(api.BaseHandler):
         verbosity = "verbose" if LOGGER.level == logging.DEBUG else "error"
         server_command.append(f"--log={verbosity}")
 
-        transport = api.StandardIO(server_command)
-        self.client = api.Client(transport, self)
+        self.transport = api.StandardIO(server_command)
+        self.client = api.Client(self.transport, self)
 
         # workspace status
         self._initializing = False
