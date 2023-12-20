@@ -853,6 +853,12 @@ class ClangdHandler(api.BaseHandler):
         current_sel = tuple(current_view.sel())
         visible_region = current_view.visible_region()
 
+        def restore_selection():
+            self.active_window().focus_view(current_view)
+            current_view.sel().clear()
+            current_view.sel().add_all(current_sel)
+            current_view.show(visible_region, show_surrounds=False)
+
         def build_location(location: dict):
             file_name = api.uri_to_path(location["uri"])
             row = location["range"]["start"]["line"]
@@ -860,17 +866,15 @@ class ClangdHandler(api.BaseHandler):
             return f"{file_name}:{row+1}:{col+1}"
 
         locations = [build_location(l) for l in locations]
+        locations.sort()
 
         def open_location(index):
             if index < 0:
-                self.active_window().focus_view(current_view)
-                current_view.sel().clear()
-                current_view.sel().add_all(current_sel)
-                current_view.show(visible_region, show_surrounds=False)
+                restore_selection()
+                return
 
-            else:
-                flags = sublime.ENCODED_POSITION
-                self.active_window().open_file(locations[index], flags=flags)
+            flags = sublime.ENCODED_POSITION
+            self.active_window().open_file(locations[index], flags=flags)
 
         def preview_location(index):
             flags = sublime.ENCODED_POSITION | sublime.TRANSIENT
