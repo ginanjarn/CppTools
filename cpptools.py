@@ -248,7 +248,6 @@ class BufferedDocument:
         return self._cached_completion is not None
 
     def _trigger_completion(self):
-        LOGGER.debug("trigger completion")
         self.view.run_command(
             "auto_complete",
             {
@@ -1076,12 +1075,10 @@ class EventListener(sublime_plugin.EventListener):
                 show = False
 
             if (cache := document.cached_completion) and show:
-                LOGGER.debug("show auto_complete")
                 return sublime.CompletionList(
                     cache, flags=sublime.INHIBIT_WORD_COMPLETIONS
                 )
 
-            LOGGER.debug("hide auto_complete")
             document.hide_completion()
             return
 

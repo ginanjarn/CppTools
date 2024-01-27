@@ -48,8 +48,6 @@ class BaseHandler:
         return f"handle_{method}".replace("/", "_").replace(".", "_").lower()
 
     def handle(self, method: str, params: dict):
-        LOGGER.info("handle '%s'", method)
-
         try:
             func = getattr(self, self.flatten_method(method))
         except AttributeError as err:
@@ -371,9 +369,9 @@ class Client:
         while True:
             try:
                 listen_func()
-            except EOFError as err:
-                LOGGER.debug(err)
+            except EOFError:
                 break
+
             except Exception as err:
                 LOGGER.exception(err)
                 self.terminate_server()
