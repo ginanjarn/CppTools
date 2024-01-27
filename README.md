@@ -17,7 +17,8 @@ This plugin is for you who want use feature like Visual Studio Code capability b
 
 
 > **COMPILE COMMANDS**
->  `clangd` requires `compile_commands.json` to provide scope context. If not defined, `clangd` will not working as expected.
+> 
+> `clangd` requires `compile_commands.json` to provide scope context. If not defined, `clangd` will not working as expected.
 >  
 > Auto generate with `cmake` generator with added flag `-DCMAKE_EXPORT_COMPILE_command=TRUE`.
-> Or, use [cmake plugin](https://github.com/ginanjarn/cmaketools) to generate cmake config from Sublime Text command.
+> Or, use  [CMakeTools](https://github.com/ginanjarn/CMakeTools) to generate cmake config from Sublime Text command.
