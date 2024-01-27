@@ -389,8 +389,8 @@ class Workspace:
         return self.documents.get(view, default)
 
     @lock(document_lock)
-    def set_document(self, view: sublime.View, document: BufferedDocument):
-        self.documents[view] = document
+    def add_document(self, document: BufferedDocument):
+        self.documents[document.view] = document
 
     @lock(document_lock)
     def remove_document(self, view: sublime.View):
@@ -576,7 +576,7 @@ class ClangdHandler(api.BaseHandler):
         other_documents = self.workspace.get_documents(file_name)
 
         document = BufferedDocument(view)
-        self.workspace.set_document(view, document)
+        self.workspace.add_document(document)
 
         # if document has opened in other View
         if other_documents:
