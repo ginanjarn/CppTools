@@ -1,11 +1,11 @@
 <snippet>
 	<content><![CDATA[
-#ifndef ${1:${TM_FILENAME/\.h(?:pp)?//}_H}
-#define ${1:${TM_FILENAME/\.h(?:pp)?//}_H}
+#ifndef ${1:${TM_FILENAME/\.(?:h|c)[pxcm]*//}_H}
+#define ${1}
 
 ${0:// declarations}
 
-#endif // ${1:${TM_FILENAME/\.h(?:pp)?//}_H}
+#endif // ${1}
 ]]></content>
 	<!-- Optional: Set a tabTrigger to define how to trigger the snippet -->
 	<tabTrigger>#ifndef</tabTrigger>
