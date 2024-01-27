@@ -363,6 +363,9 @@ class Session:
 
 
 class Workspace:
+    # Map document by view is easier to track if view is valid.
+    # If we map by file name, one document my related to multiple 'View'
+    # and some times the 'View' is invalid.
     def __init__(self):
         self.documents: Dict[sublime.View, BufferedDocument] = {}
         self.diagnostics: Dict[str, dict] = {}
@@ -521,6 +524,8 @@ class ClangdHandler(api.BaseHandler):
             return
 
         workspace_path = get_workspace_path(view)
+        if not workspace_path:
+            return
 
         self._initializing = True
         self.client.send_request(
@@ -627,7 +632,9 @@ class ClangdHandler(api.BaseHandler):
 
     @session.must_begin
     def textdocument_didchange(self, view: sublime.View, changes: List[dict]):
-        # document can be related to multiple View but has same file_name
+        # Document can be related to multiple View but has same file_name.
+        # Use get_document_by_name() because may be document already open
+        # in other view and the argument view not assigned.
         file_name = view.file_name()
         if document := self.workspace.get_document_by_name(file_name):
             self.client.send_notification(
@@ -720,6 +727,7 @@ class ClangdHandler(api.BaseHandler):
         diagnostic_text = ""
         self.workspace.set_diagnostic(file_name, diagnostics)
 
+        # Ensure diagnostics unchanged while buid message and applying syntax highlight
         with self.workspace.diagnostic_lock:
             diagnostic_text = self._build_message(self.workspace.get_diagnostics())
 
@@ -980,6 +988,8 @@ def valid_context(view: sublime.View, point: int):
 def get_workspace_path(view: sublime.View) -> str:
     window = view.window()
     file_name = view.file_name()
+    if not file_name:
+        return ""
 
     if folders := [
         folder for folder in window.folders() if file_name.startswith(folder)
