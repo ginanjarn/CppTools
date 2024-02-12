@@ -273,19 +273,16 @@ class StandardIO(Transport):
             LOGGER.exception("header: %s", temp_header.getvalue())
             raise err
 
-        # in some case where received content less than content_length
         temp_content = BytesIO()
         n_content = 0
-        while True:
-            if n_content < content_length:
-                unread_length = content_length - n_content
-                if chunk := self.stdout.read(unread_length):
-                    n = temp_content.write(chunk)
-                    n_content += n
-                else:
-                    raise EOFError("stdout closed")
+        # Read until defined content_length received.
+        while n_content < content_length:
+            unread_length = content_length - n_content
+            if chunk := self.stdout.read(unread_length):
+                n = temp_content.write(chunk)
+                n_content += n
             else:
-                break
+                raise EOFError("stdout closed")
 
         content = temp_content.getvalue()
         return content
