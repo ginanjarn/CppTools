@@ -291,7 +291,11 @@ class StandardIO(Transport):
         return content
 
 
-class RequestData:
+class Canceled(Exception):
+    """Request Canceled"""
+
+
+class RequestManager:
     def __init__(self):
         self.lock = threading.RLock()
         self.request_map = {}
@@ -303,26 +307,37 @@ class RequestData:
             self.request_count += 1
             self.request_map[self.request_count] = method
 
-    def add_canceled_request(self, *request_id: int):
-        with self.lock:
-            self.canceled_request.update(set(request_id))
+    def get_request(self, request_id: int) -> str:
+        """
+        Return:
+            method: str
+        Raises:
+            KeyError if request_id not found
+            Canceled if request canceled
+        """
 
-    def is_canceled(self, request_id: int) -> bool:
         with self.lock:
-            return request_id in self.canceled_request
-
-    def remove(self, request_id: int):
-        with self.lock:
-            # both request_map and canceled_request key must removed
-            try:
-                del self.request_map[request_id]
-            except KeyError:
-                pass
-
-            try:
+            if request_id in self.canceled_request:
+                # Clean request map
                 self.canceled_request.remove(request_id)
-            except KeyError:
-                pass
+                del self.request_map[request_id]
+
+                raise Canceled(request_id)
+
+            return self.request_map.pop(request_id)
+
+    def get_request_id(self, method: str) -> Optional[int]:
+        """return None if not found"""
+        with self.lock:
+            for req_id, meth in self.request_map.items():
+                if meth == method:
+                    return req_id
+
+            return None
+
+    def cancel_requests(self, *request_id: int):
+        with self.lock:
+            self.canceled_request.update(request_id)
 
 
 class Client:
@@ -330,7 +345,7 @@ class Client:
         self._transport = weakref.ref(transport, lambda x: self._reset_state())
         self._handler = weakref.ref(handler, lambda x: self._reset_state())
 
-        self.request_data = RequestData()
+        self.request_manager = RequestManager()
 
     @property
     def transport(self):
@@ -341,7 +356,7 @@ class Client:
         return self._handler()
 
     def _reset_state(self):
-        self.request_data = RequestData()
+        self.request_manager = RequestManager()
 
     def send_message(self, message: RPCMessage):
         content = message.dumps(as_bytes=True)
@@ -429,28 +444,26 @@ class Client:
             LOGGER.debug(err, exc_info=True)
 
     def handle_response(self, message: RPCMessage):
-        # check if request canceled
-        if self.request_data.is_canceled(message["id"]):
-            self.request_data.remove(message["id"])
+        try:
+            method = self.request_manager.get_request(message["id"])
+        except (Canceled, KeyError):
+            # handle exception here
             return
 
-        method = self.request_data.request_map.pop(message["id"], "unknown")
         try:
             self.handler.handle(method, message)
         except Exception as err:
             LOGGER.exception(err, exc_info=True)
 
     def send_request(self, method: str, params: dict):
-        with self.request_data.lock:
-            duplicated = [
-                id_
-                for id_, meth in self.request_data.request_map.items()
-                if meth == method
-            ]
-            self.request_data.add_canceled_request(*duplicated)
+        prev_request = self.request_manager.get_request_id(method)
+        if prev_request is not None:
+            # cancel previous request
+            self.request_manager.cancel_requests(prev_request)
+            self.send_notification("$/cancelRequest", {"id": prev_request})
 
-        self.request_data.add_request(method)
-        req_id = self.request_data.request_count
+        self.request_manager.add_request(method)
+        req_id = self.request_manager.request_count
         self.send_message(RPCMessage.request(req_id, method, params))
 
     def send_notification(self, method: str, params: dict):
