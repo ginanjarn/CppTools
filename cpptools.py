@@ -650,6 +650,11 @@ class ClangdHandler(api.BaseHandler):
 
     @session.must_begin
     def textdocument_hover(self, view, row, col):
+        # In multi row/column layout, new popup will created in current View,
+        # but active popup doesn't discarded.
+        if other := self.action_target.hover:
+            other.view.hide_popup()
+
         if document := self.workspace.get_document(view):
             self.client.send_request(
                 "textDocument/hover",
