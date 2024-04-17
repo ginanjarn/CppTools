@@ -130,7 +130,10 @@ class CpptoolsApplyTextChangesCommand(sublime_plugin.TextCommand):
 class UnbufferedDocument:
     def __init__(self, file_name: PathStr):
         self._path = Path(file_name)
-        self.text = self._path.read_text()
+
+    @property
+    def text(self):
+        return self._path.read_text()
 
     def apply_text_changes(self, changes: List[dict]):
         with MULTIDOCUMENT_CHANGE_LOCK:
