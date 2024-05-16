@@ -15,7 +15,8 @@ import sublime
 import sublime_plugin
 from sublime import HoverZone
 
-from . import api
+from .api import lsp_client
+
 
 LOGGER = logging.getLogger(__name__)
 # LOGGER.setLevel(logging.DEBUG)
@@ -196,8 +197,8 @@ class BufferedDocument:
 
         return self.view.substr(sublime.Region(0, self.view.size()))
 
-    def document_uri(self) -> api.URI:
-        return api.path_to_uri(self.file_name)
+    def document_uri(self) -> lsp_client.URI:
+        return lsp_client.path_to_uri(self.file_name)
 
     @property
     def language_id(self) -> str:
@@ -475,7 +476,7 @@ class ActionTarget:
     rename: BufferedDocument = None
 
 
-class ClangdHandler(api.BaseHandler):
+class ClangdHandler(lsp_client.BaseHandler):
     """"""
 
     session = Session()
@@ -487,8 +488,8 @@ class ClangdHandler(api.BaseHandler):
         verbosity = "verbose" if LOGGER.level == logging.DEBUG else "error"
         server_command.append(f"--log={verbosity}")
 
-        self.transport = api.StandardIO(server_command)
-        self.client = api.Client(self.transport, self)
+        self.transport = lsp_client.StandardIO(server_command)
+        self.client = lsp_client.Client(self.transport, self)
 
         # workspace status
         self._initializing = False
@@ -553,7 +554,7 @@ class ClangdHandler(api.BaseHandler):
             "initialize",
             {
                 "rootPath": workspace_path,
-                "rootUri": api.path_to_uri(workspace_path),
+                "rootUri": lsp_client.path_to_uri(workspace_path),
                 "capabilities": {
                     "textDocument": {
                         "hover": {
@@ -746,7 +747,7 @@ class ClangdHandler(api.BaseHandler):
         return "".join(messages)
 
     def handle_textdocument_publishdiagnostics(self, params: dict):
-        file_name = api.uri_to_path(params["uri"])
+        file_name = lsp_client.uri_to_path(params["uri"])
         diagnostics = params["diagnostics"]
 
         diagnostic_text = ""
@@ -832,7 +833,7 @@ class ClangdHandler(api.BaseHandler):
 
     def _apply_edit(self, edit: dict):
         for file_uri, changes in edit["changes"].items():
-            file_name = api.uri_to_path(file_uri)
+            file_name = lsp_client.uri_to_path(file_uri)
             document = self.workspace.get_document_by_name(
                 file_name, UnbufferedDocument(file_name)
             )
@@ -892,7 +893,7 @@ class ClangdHandler(api.BaseHandler):
             current_view.show(visible_region, show_surrounds=False)
 
         def build_location(location: dict):
-            file_name = api.uri_to_path(location["uri"])
+            file_name = lsp_client.uri_to_path(location["uri"])
             row = location["range"]["start"]["line"]
             col = location["range"]["start"]["character"]
             return f"{file_name}:{row+1}:{col+1}"
@@ -1054,7 +1055,7 @@ class EventListener(sublime_plugin.EventListener):
                 HANDLER.textdocument_didopen(view)
                 HANDLER.textdocument_hover(view, row, col)
 
-        except api.ServerNotRunning:
+        except lsp_client.ServerNotRunning:
             pass
 
     def on_query_completions(
@@ -1151,7 +1152,7 @@ class EventListener(sublime_plugin.EventListener):
                 HANDLER.initialize(view)
                 HANDLER.textdocument_didopen(view)
 
-            except api.ServerNotRunning:
+            except lsp_client.ServerNotRunning:
                 pass
 
     def on_post_save_async(self, view: sublime.View):
