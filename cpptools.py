@@ -1,6 +1,7 @@
 """C++ tools for Sublime Text"""
 
 import logging
+import queue
 import threading
 import time
 from collections import defaultdict
@@ -176,7 +177,7 @@ class BufferedDocument:
         self.view = view
 
         self.file_name = self.view.file_name()
-        self._cached_completion = None
+        self._cached_completion = queue.Queue(maxsize=1)
 
         self._add_view_settings()
 
@@ -222,42 +223,60 @@ class BufferedDocument:
             return COMPLETION_KIND_MAP[kind_num]
 
         def build_completion(completion: dict):
-            trigger = completion["filterText"]
-            text = completion["insertText"]
-            annotation = completion["label"]
+            text = completion["filterText"]
+            try:
+                insert_text = completion["textEdit"]["newText"]
+            except KeyError:
+                insert_text = text
+
+            # clangd defined 'label' starts with '<space>' or '•'
+            signature = completion["label"][1:]
             kind = convert_kind(completion["kind"])
 
             # sublime text has complete the header bracket '<> or ""'
             # remove it from clangd result
             if completion["kind"] in (17, 19):
-                trigger = trigger.rstrip('>"')
-                text = text.rstrip('>"')
-                annotation = annotation.rstrip('>"')
+                closing_include = '">'
+                text = text.rstrip(closing_include)
+                insert_text = insert_text.rstrip(closing_include)
+                signature = signature.rstrip(closing_include)
 
             return sublime.CompletionItem.snippet_completion(
-                trigger=trigger, snippet=text, annotation=annotation, kind=kind
+                trigger=text,
+                snippet=insert_text,
+                annotation=signature,
+                kind=kind,
             )
 
-        self._cached_completion = [build_completion(c) for c in items]
+        temp = [build_completion(c) for c in items]
+        try:
+            self._cached_completion.put_nowait(temp)
+        except queue.Full:
+            # get current completion
+            _ = self._cached_completion.get()
+            self._cached_completion.put(temp)
+
         self._trigger_completion()
 
-    @property
-    def cached_completion(self):
-        temp = self._cached_completion
-        self._cached_completion = None
-        return temp
+    def pop_completion(self) -> List[sublime.CompletionItem]:
+        try:
+            return self._cached_completion.get_nowait()
+        except queue.Empty:
+            return []
 
     def completion_ready(self) -> bool:
-        return self._cached_completion is not None
+        return not self._cached_completion.empty()
+
+    auto_complete_arguments = {
+        "disable_auto_insert": True,
+        "next_completion_if_showing": True,
+        "auto_complete_commit_on_tab": True,
+    }
 
     def _trigger_completion(self):
         self.view.run_command(
             "auto_complete",
-            {
-                "disable_auto_insert": True,
-                "next_completion_if_showing": True,
-                "auto_complete_commit_on_tab": True,
-            },
+            self.auto_complete_arguments,
         )
 
     def hide_completion(self):
@@ -1007,6 +1026,10 @@ def get_workspace_path(view: sublime.View) -> str:
 
 
 class EventListener(sublime_plugin.EventListener):
+
+    def __init__(self):
+        self.prev_completion_point = 0
+
     def on_hover(self, view: sublime.View, point: int, hover_zone: HoverZone):
         # check point in valid source
         if not (valid_context(view, point) and hover_zone == sublime.HOVER_TEXT):
@@ -1035,8 +1058,6 @@ class EventListener(sublime_plugin.EventListener):
 
         except api.ServerNotRunning:
             pass
-
-    prev_completion_loc = 0
 
     def on_query_completions(
         self, view: sublime.View, prefix: str, locations: List[int]
@@ -1079,11 +1100,11 @@ class EventListener(sublime_plugin.EventListener):
         if (
             document := HANDLER.action_target.completion
         ) and document.completion_ready():
-            word = view.word(self.prev_completion_loc)
+            word = view.word(self.prev_completion_point)
             word_str = view.substr(word).strip()
 
             # point unchanged
-            if point == self.prev_completion_loc:
+            if point == self.prev_completion_point:
                 show = is_show_after(word_str)
 
             # point changed but still in same word
@@ -1092,7 +1113,7 @@ class EventListener(sublime_plugin.EventListener):
             else:
                 show = False
 
-            if (cache := document.cached_completion) and show:
+            if (cache := document.pop_completion()) and show:
                 return sublime.CompletionList(
                     cache, flags=sublime.INHIBIT_WORD_COMPLETIONS
                 )
@@ -1100,7 +1121,7 @@ class EventListener(sublime_plugin.EventListener):
             document.hide_completion()
             return
 
-        self.prev_completion_loc = point
+        self.prev_completion_point = point
         row, col = view.rowcol(point)
 
         threading.Thread(
