@@ -7,7 +7,6 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import wraps
-from io import StringIO
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
@@ -726,26 +725,25 @@ class ClangdHandler(api.BaseHandler):
                 self.action_target.completion.show_completion(items)
 
     def _build_message(self, diagnostics_map: Dict[PathStr, Any]) -> str:
-        message_buffer = StringIO()
+        messages = []
 
-        def build_message(file_name: PathStr, diagnostics: List[Dict[str, Any]]):
-            for diagnostic in diagnostics:
-                short_name = Path(file_name).name
-                row = diagnostic["range"]["start"]["line"]
-                col = diagnostic["range"]["start"]["character"]
-                message = diagnostic["message"]
-                source = diagnostic.get("source", "")
+        def build_line(file_name, diagnostic):
+            short_name = Path(file_name).name
+            row = diagnostic["range"]["start"]["line"]
+            col = diagnostic["range"]["start"]["character"]
+            message = diagnostic["message"]
+            source = diagnostic.get("source", "")
 
-                # natural line index start with 1
-                row += 1
+            # natural line index start with 1
+            row += 1
 
-                yield f"{short_name}:{row}:{col}: {message} ({source})\n"
+            return f"{short_name}:{row}:{col}: {message} ({source})\n"
 
         for file_name, diagnostics in diagnostics_map.items():
-            lines = build_message(file_name, diagnostics)
-            message_buffer.writelines(lines)
+            lines = [build_line(file_name, item) for item in diagnostics]
+            messages.extend(lines)
 
-        return message_buffer.getvalue()
+        return "".join(messages)
 
     def handle_textdocument_publishdiagnostics(self, params: dict):
         file_name = api.uri_to_path(params["uri"])
