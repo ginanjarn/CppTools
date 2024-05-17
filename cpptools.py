@@ -351,24 +351,25 @@ class DiagnosticPanel:
 
 class Session:
     def __init__(self):
-        self._begin = False
-        self._begin_event = threading.Event()
+        self.event = threading.Event()
 
-    def is_ready(self):
-        return self._begin
+    def is_begin(self):
+        return self.event.is_set()
 
     def begin(self):
-        self._begin = True
-        self._begin_event.set()
+        """begin session"""
+        self.event.set()
 
     def done(self):
-        self._begin = False
-        self._begin_event.clear()
+        """done session"""
+        self.event.clear()
 
     def must_begin(self, func):
+        """return 'None' if not begin"""
+
         @wraps(func)
         def wrapper(*args, **kwargs):
-            if not self._begin:
+            if not self.event.is_set():
                 return None
 
             return func(*args, **kwargs)
@@ -376,9 +377,11 @@ class Session:
         return wrapper
 
     def wait_begin(self, func):
+        """return function after session is begin"""
+
         @wraps(func)
         def wrapper(*args, **kwargs):
-            self._begin_event.wait()
+            self.event.wait()
             return func(*args, **kwargs)
 
         return wrapper
@@ -509,7 +512,7 @@ class ClangdHandler(lsp_client.BaseHandler):
         self.session.done()
 
     def ready(self) -> bool:
-        return self.client.server_running() and self.session.is_ready()
+        return self.client.server_running() and self.session.is_begin()
 
     run_server_lock = threading.Lock()
 
@@ -1039,24 +1042,16 @@ class EventListener(sublime_plugin.EventListener):
         threading.Thread(target=self._on_hover, args=(view, row, col)).start()
 
     def _on_hover(self, view, row, col):
-        # check if server available
-        try:
-            if HANDLER.ready():
-                # on multi column layout, sometime we hover on other document which may
-                # not loaded yet
-                HANDLER.textdocument_didopen(view)
-                # request on hover
-                HANDLER.textdocument_hover(view, row, col)
-            else:
-                # initialize server
-                HANDLER.run_server()
+        # initialize server if not ready
+        if not HANDLER.ready():
+            HANDLER.run_server()
+            HANDLER.initialize(view)
 
-                HANDLER.initialize(view)
-                HANDLER.textdocument_didopen(view)
-                HANDLER.textdocument_hover(view, row, col)
-
-        except lsp_client.ServerNotRunning:
-            pass
+        # on multi column layout, sometime we hover on other document which may
+        # not loaded yet
+        HANDLER.textdocument_didopen(view)
+        # request on hover
+        HANDLER.textdocument_hover(view, row, col)
 
     def on_query_completions(
         self, view: sublime.View, prefix: str, locations: List[int]
@@ -1140,20 +1135,15 @@ class EventListener(sublime_plugin.EventListener):
 
         if HANDLER.ready():
             HANDLER.textdocument_didopen(view)
+            return
 
-        else:
-            if LOGGER.level == logging.DEBUG:
-                return
+        if LOGGER.level == logging.DEBUG:
+            return
 
-            try:
-                # initialize server
-                HANDLER.run_server()
-
-                HANDLER.initialize(view)
-                HANDLER.textdocument_didopen(view)
-
-            except lsp_client.ServerNotRunning:
-                pass
+        # initialize server
+        HANDLER.run_server()
+        HANDLER.initialize(view)
+        HANDLER.textdocument_didopen(view)
 
     def on_post_save_async(self, view: sublime.View):
         # check point in valid source
