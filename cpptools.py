@@ -1038,9 +1038,11 @@ class EventListener(sublime_plugin.EventListener):
             return
 
         row, col = view.rowcol(point)
+        if HANDLER.ready():
+            HANDLER.textdocument_hover(view, row, col)
 
-        threading.Thread(target=self._on_hover, args=(view, row, col)).start()
-
+        else:
+            threading.Thread(target=self._on_hover, args=(view, row, col)).start()
     def _on_hover(self, view, row, col):
         # initialize server if not ready
         if not HANDLER.ready():
@@ -1063,7 +1065,7 @@ class EventListener(sublime_plugin.EventListener):
 
         # check point in valid source
         if not valid_context(view, point):
-            return
+            return None
 
         def is_show_after(word_str: str) -> bool:
             if word_str.isspace() or word_str.isidentifier():
@@ -1113,20 +1115,15 @@ class EventListener(sublime_plugin.EventListener):
                 )
 
             document.hide_completion()
-            return
+            return None
 
         self.prev_completion_point = point
         row, col = view.rowcol(point)
 
-        threading.Thread(
-            target=self._on_query_completions, args=(view, row, col)
-        ).start()
-
+        HANDLER.textdocument_completion(view, row, col)
         view.run_command("hide_auto_complete")
 
-    def _on_query_completions(self, view, row, col):
-        if HANDLER.ready():
-            HANDLER.textdocument_completion(view, row, col)
+        return None
 
     def on_activated_async(self, view: sublime.View):
         # check point in valid source
