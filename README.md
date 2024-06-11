@@ -12,7 +12,7 @@ This plugin is for you who want use feature like Visual Studio Code capability b
 
 # Requirements
 * **Sublime Text** build `4050` or later
-* `Markdown Popup` sublime plugin. ( repo `https://github.com/ginanjarn/markdown_popup.git` )
+* `MarkedPopup` sublime plugin. ( repo `https://github.com/ginanjarn/MarkedPopup.git` )
 * `Clangd`. ( Clangd is part of LLVM Project. Install instruction on [LLVM home page](https://releases.llvm.org/download.html) )
 
 

@@ -216,7 +216,9 @@ class BufferedDocument:
 
     def show_popup(self, text: str, row: int, col: int):
         point = self.view.text_point(row, col)
-        self.view.run_command("markdown_popup", {"text": text, "point": point})
+        self.view.run_command(
+            "marked_popup", {"location": point, "text": text, "markup": "markdown"}
+        )
 
     def show_completion(self, items: List[dict]):
         def convert_kind(kind_num: int):
@@ -1043,6 +1045,7 @@ class EventListener(sublime_plugin.EventListener):
 
         else:
             threading.Thread(target=self._on_hover, args=(view, row, col)).start()
+
     def _on_hover(self, view, row, col):
         # initialize server if not ready
         if not HANDLER.ready():
