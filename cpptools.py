@@ -493,6 +493,20 @@ class Workspace:
             LOGGER.debug("diagnostic not found %s", err)
             pass
 
+    @lock(document_lock)
+    @lock(diagnostic_lock)
+    def remove_invalid_diagnostic(self):
+        """remove invalid diagnostic"""
+
+        removed_file = set()
+        document_files = {doc.file_name for _, doc in self.documents.items()}
+        for file_name, _ in self.diagnostics.items():
+            if not file_name in document_files:
+                removed_file.add(file_name)
+
+        for file_name in removed_file:
+            del self.diagnostics[file_name]
+
 
 @dataclass
 class ActionTarget:
@@ -530,6 +544,8 @@ class ClangdHandler(lsp_client.BaseHandler):
     def _reset_state(self):
         self.workspace = Workspace()
         self._initializing = False
+        self.diagnostics_panel.destroy()
+        TextHighlighter.clear_all()
 
         # commands document target
         self.action_target = ActionTarget()
@@ -668,9 +684,11 @@ class ClangdHandler(lsp_client.BaseHandler):
             if self.workspace.get_documents(file_name):
                 return
 
-            self.workspace.remove_diagnostic(file_name)
+            self.workspace.remove_invalid_diagnostic()
 
-            diagnostic_text = self._build_message(self.workspace.get_diagnostics())
+            diagnostic_text = self._build_diagnostic_message(
+                self.workspace.get_diagnostics()
+            )
             self.diagnostics_panel.set_content(diagnostic_text)
             self.diagnostics_panel.show()
 
@@ -752,7 +770,7 @@ class ClangdHandler(lsp_client.BaseHandler):
             else:
                 self.action_target.completion.show_completion(items)
 
-    def _build_message(self, diagnostics_map: Dict[PathStr, Any]) -> str:
+    def _build_diagnostic_message(self, diagnostics_map: Dict[PathStr, Any]) -> str:
         messages = []
 
         def build_line(file_name, diagnostic):
@@ -782,7 +800,9 @@ class ClangdHandler(lsp_client.BaseHandler):
 
         # Ensure diagnostics unchanged while buid message and applying syntax highlight
         with self.workspace.diagnostic_lock:
-            diagnostic_text = self._build_message(self.workspace.get_diagnostics())
+            diagnostic_text = self._build_diagnostic_message(
+                self.workspace.get_diagnostics()
+            )
 
             for document in self.workspace.get_documents(file_name):
                 document.highlight_text(diagnostics)
