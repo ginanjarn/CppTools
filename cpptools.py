@@ -128,6 +128,45 @@ class CpptoolsApplyTextChangesCommand(sublime_plugin.TextCommand):
         self.view.sel().add_all(moved_selections)
 
 
+class TextHighlighter:
+    REGIONS_KEY = "cpptools_region"
+
+    def __init__(self, view: sublime.View, diagnostics: List[dict]):
+        self.view = view
+        self.diagnostics = diagnostics
+
+    def get_region(self, diagnostic: dict):
+        start = diagnostic["range"]["start"]
+        end = diagnostic["range"]["end"]
+
+        start_point = self.view.text_point(start["line"], start["character"])
+        end_point = self.view.text_point(end["line"], end["character"])
+        return sublime.Region(start_point, end_point)
+
+    def apply(self):
+        regions = [self.get_region(d) for d in self.diagnostics]
+
+        self.view.add_regions(
+            key=self.REGIONS_KEY,
+            regions=regions,
+            scope="Comment",
+            icon="dot",
+            flags=sublime.DRAW_NO_FILL
+            | sublime.DRAW_NO_OUTLINE
+            | sublime.DRAW_SQUIGGLY_UNDERLINE,
+        )
+
+    def clear(self):
+        self.view.erase_regions(TextHighlighter.REGIONS_KEY)
+
+    @staticmethod
+    def clear_all():
+        """clear all text hightlight"""
+        for window in sublime.windows():
+            for view in window.views(include_transient=True):
+                view.erase_regions(TextHighlighter.REGIONS_KEY)
+
+
 class UnbufferedDocument:
     def __init__(self, file_name: PathStr):
         self._path = Path(file_name)
@@ -288,26 +327,9 @@ class BufferedDocument:
         self.view.run_command("cpptools_apply_text_changes", {"changes": changes})
 
     def highlight_text(self, diagnostics: List[dict]):
-        def get_region(diagnostic):
-            start = diagnostic["range"]["start"]
-            end = diagnostic["range"]["end"]
-
-            start_point = self.view.text_point(start["line"], start["character"])
-            end_point = self.view.text_point(end["line"], end["character"])
-            return sublime.Region(start_point, end_point)
-
-        regions = [get_region(d) for d in diagnostics]
-        key = "cpptools_diagnostic"
-
-        self.view.add_regions(
-            key=key,
-            regions=regions,
-            scope="Comment",
-            icon="dot",
-            flags=sublime.DRAW_NO_FILL
-            | sublime.DRAW_NO_OUTLINE
-            | sublime.DRAW_SQUIGGLY_UNDERLINE,
-        )
+        highligter = TextHighlighter(self.view, diagnostics)
+        highligter.clear()
+        highligter.apply()
 
 
 class DiagnosticPanel:
