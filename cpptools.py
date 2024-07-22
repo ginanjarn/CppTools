@@ -28,6 +28,7 @@ LOGGER.addHandler(sh)
 # support type
 PathStr = str
 
+PACKAGE_NAME = str(Path(__file__).parent)
 
 # custom kind
 KIND_PATH = (sublime.KIND_ID_VARIABLE, "p", "")
@@ -129,11 +130,10 @@ class CpptoolsApplyTextChangesCommand(sublime_plugin.TextCommand):
 
 
 class TextHighlighter:
-    REGIONS_KEY = "cpptools_region"
+    REGIONS_KEY = f"{PACKAGE_NAME}_REGIONS"
 
-    def __init__(self, view: sublime.View, diagnostics: List[dict]):
+    def __init__(self, view: sublime.View):
         self.view = view
-        self.diagnostics = diagnostics
 
     def get_region(self, diagnostic: dict):
         start = diagnostic["range"]["start"]
@@ -143,8 +143,8 @@ class TextHighlighter:
         end_point = self.view.text_point(end["line"], end["character"])
         return sublime.Region(start_point, end_point)
 
-    def apply(self):
-        regions = [self.get_region(d) for d in self.diagnostics]
+    def apply(self, diagnostics: List[dict]):
+        regions = [self.get_region(d) for d in diagnostics]
 
         self.view.add_regions(
             key=self.REGIONS_KEY,
@@ -212,17 +212,18 @@ class UnbufferedDocument:
 
 
 class BufferedDocument:
+    VIEW_SETTINGS = {
+        "show_definition": False,
+        "auto_complete_use_index": False,
+    }
+
     def __init__(self, view: sublime.View):
         self.view = view
 
         self.file_name = self.view.file_name()
         self._cached_completion = queue.Queue(maxsize=1)
 
-        self._add_view_settings()
-
-    def _add_view_settings(self):
-        self.view.settings().set("show_definitions", False)
-        self.view.settings().set("auto_complete_use_index", False)
+        self.view.settings().update(self.VIEW_SETTINGS)
 
     @property
     def version(self) -> int:
@@ -327,40 +328,32 @@ class BufferedDocument:
         self.view.run_command("cpptools_apply_text_changes", {"changes": changes})
 
     def highlight_text(self, diagnostics: List[dict]):
-        highligter = TextHighlighter(self.view, diagnostics)
+        highligter = TextHighlighter(self.view)
         highligter.clear()
-        highligter.apply()
+        highligter.apply(diagnostics)
 
 
 class DiagnosticPanel:
-    OUTPUT_PANEL_NAME = "cpptools_panel"
+    OUTPUT_PANEL_NAME = f"{PACKAGE_NAME}_PANEL"
+    SETTINGS = {"gutter": False, "word_wrap": False}
 
     def __init__(self):
         self.panel: sublime.View = None
 
     def _create_panel(self):
         self.panel = sublime.active_window().create_output_panel(self.OUTPUT_PANEL_NAME)
-        settings = {"gutter": False, "word_wrap": False}
-        self.panel.settings().update(settings)
+        self.panel.settings().update(self.SETTINGS)
         self.panel.set_read_only(False)
 
     def set_content(self, text: str):
         if not (self.panel and self.panel.is_valid()):
             self._create_panel()
 
-        # recreate panel if assigned window has closed
-        if not self.panel.is_valid():
-            self.window = sublime.active_window()
-            self._create_panel()
-
         # clear content
         self.panel.run_command("select_all")
         self.panel.run_command("left_delete")
 
-        self.panel.run_command(
-            "append",
-            {"characters": text},
-        )
+        self.panel.run_command("append", {"characters": text})
 
     def show(self) -> None:
         """show output panel"""
@@ -370,7 +363,8 @@ class DiagnosticPanel:
 
     def destroy(self):
         """destroy output panel"""
-        sublime.active_window().destroy_output_panel(self.OUTPUT_PANEL_NAME)
+        for window in sublime.windows():
+            window.destroy_output_panel(self.OUTPUT_PANEL_NAME)
 
 
 class Session:
