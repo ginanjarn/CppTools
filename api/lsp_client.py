@@ -429,7 +429,7 @@ class Client:
         try:
             result = self.handler.handle(message["method"], message["params"])
         except Exception as err:
-            LOGGER.debug(err, exc_info=True)
+            LOGGER.exception(err, exc_info=True)
             error = RPCMessage.exception_to_message(err)
 
         self.send_response(message["id"], result, error)
@@ -438,7 +438,7 @@ class Client:
         try:
             self.handler.handle(message["method"], message["params"])
         except Exception as err:
-            LOGGER.debug(err, exc_info=True)
+            LOGGER.exception(err, exc_info=True)
 
     def handle_response(self, message: RPCMessage):
         try:
