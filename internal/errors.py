@@ -23,6 +23,13 @@ class InvalidRequest(BaseRPCError):
 class MethodNotFound(BaseRPCError):
     """method not found"""
 
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.name = name
+
+    def __repr__(self):
+        return f"MethodNotFound({self.name}!r)"
+
     code = -32601
     message = "method not found"
 
@@ -52,3 +59,15 @@ class InvalidResource(InternalError):
     """invalid resource"""
 
     message = "invalid resource"
+
+
+def transform_error(error: BaseRPCError) -> dict:
+    """transform error to rpc"""
+
+    if not error:
+        return None
+
+    if isinstance(error, BaseRPCError):
+        return {"message": error.message, "code": error.code}
+
+    return {"message": str(error), "code": 1}

@@ -9,52 +9,23 @@ import subprocess
 import shlex
 import weakref
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import unquote, urlparse
-from urllib.request import url2pathname
-from typing import Optional, Union
+from typing import Optional, Union, List
 
 from . import errors
+from .constant import LOGGING_CHANNEL
 
-URI = str
-_PathLikeStr = str
-
-LOGGER = logging.getLogger(__name__)
-# LOGGER.setLevel(logging.DEBUG)
-fmt = logging.Formatter("%(levelname)s %(filename)s:%(lineno)d  %(message)s")
-sh = logging.StreamHandler()
-sh.setFormatter(fmt)
-LOGGER.addHandler(sh)
+LOGGER = logging.getLogger(LOGGING_CHANNEL)
 
 
-def path_to_uri(path: _PathLikeStr) -> URI:
-    """convert path to uri"""
-    return Path(path).as_uri()
-
-
-def uri_to_path(uri: URI) -> _PathLikeStr:
-    """convert uri to path"""
-    return url2pathname(unquote(urlparse(uri).path))
-
-
-class BaseHandler:
+class Handler(ABC):
     """Base handler"""
 
-    @staticmethod
-    def flatten_method(method: str) -> str:
-        return f"handle_{method}".replace("/", "_").replace(".", "_").lower()
-
-    def handle(self, method: str, params: dict):
-        try:
-            func = getattr(self, self.flatten_method(method))
-        except AttributeError as err:
-            raise errors.MethodNotFound(f"method not found {method!r}") from err
-
-        else:
-            return func(params)
+    @abstractmethod
+    def handle(self, method: str, params: dict) -> Optional[dict]:
+        """handle message"""
 
 
 class RPCMessage(dict):
@@ -97,10 +68,6 @@ class RPCMessage(dict):
             raise ValueError("Not a JSON-RPC 2.0")
         return cls(loaded)
 
-    @staticmethod
-    def exception_to_message(exception: Exception) -> dict:
-        return {"message": str(exception), "code": 1}
-
 
 if os.name == "nt":
     # if on Windows, hide process window
@@ -141,7 +108,7 @@ class Transport(ABC):
         """check server is running"""
 
     @abstractmethod
-    def run(self) -> None:
+    def run(self, env: Optional[dict] = None) -> None:
         """run server"""
 
     @abstractmethod
@@ -157,17 +124,12 @@ class Transport(ABC):
         """read data from server"""
 
 
-@dataclass
-class PopenOptions:
-    env: dict = None
-    cwd: str = None
-
-
 class StandardIO(Transport):
     """StandardIO Transport implementation"""
 
-    def __init__(self, command: list):
+    def __init__(self, command: List[str], cwd: Optional[Path] = None):
         self.command = command
+        self.cwd = cwd
 
         self._process: subprocess.Popen = None
         self._run_event = threading.Event()
@@ -178,8 +140,7 @@ class StandardIO(Transport):
     def is_running(self):
         return bool(self._process) and (self._process.poll() is None)
 
-    def run(self, options: PopenOptions = None):
-        options = options or PopenOptions()
+    def run(self, env: Optional[dict] = None):
         print("execute '%s'" % shlex.join(self.command))
 
         self._process = subprocess.Popen(
@@ -187,8 +148,8 @@ class StandardIO(Transport):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=options.env,
-            cwd=options.cwd,
+            env=env or None,
+            cwd=self.cwd or None,
             shell=True,
             bufsize=0,
             startupinfo=STARTUPINFO,
@@ -223,7 +184,7 @@ class StandardIO(Transport):
 
         prefix = f"[{self.command[0]}]"
         while bline := self.stderr.readline():
-            print(prefix, bline.strip().decode())
+            print(prefix, bline.rstrip().decode())
 
         # else:
         return
@@ -293,19 +254,30 @@ class Canceled(Exception):
 
 
 class RequestManager:
+    """RequestManager manage method mapped to request_id."""
+
     def __init__(self):
-        self.lock = threading.RLock()
-        self.request_map = {}
-        self.canceled_request = set()
+        self.methods_map = {}
+        self.canceled_requests = set()
         self.request_count = 0
 
-    def add_request(self, method: str):
-        with self.lock:
-            self.request_count += 1
-            self.request_map[self.request_count] = method
+        self._lock = threading.Lock()
 
-    def get_request(self, request_id: int) -> str:
+    def add_method(self, method: str) -> int:
+        """add request method to request_map
+
+        Return:
+            request_count: int
         """
+        with self._lock:
+            self.request_count += 1
+            self.methods_map[self.request_count] = method
+
+            return self.request_count
+
+    def get_method(self, request_id: int) -> str:
+        """get method paired with request_id
+
         Return:
             method: str
         Raises:
@@ -313,32 +285,43 @@ class RequestManager:
             Canceled if request canceled
         """
 
-        with self.lock:
-            if request_id in self.canceled_request:
-                # Clean request map
-                self.canceled_request.remove(request_id)
-                del self.request_map[request_id]
-
+        with self._lock:
+            if request_id in self.canceled_requests:
+                self.canceled_requests.remove(request_id)
                 raise Canceled(request_id)
 
-            return self.request_map.pop(request_id)
+            # pop() is simpler than get() and del
+            return self.methods_map.pop(request_id)
 
     def get_request_id(self, method: str) -> Optional[int]:
-        """return None if not found"""
-        with self.lock:
-            for req_id, meth in self.request_map.items():
+        """get request_id paired with method
+
+        Return:
+            request_id: Optional[int]
+        """
+
+        with self._lock:
+            for req_id, meth in self.methods_map.items():
                 if meth == method:
                     return req_id
 
             return None
 
-    def cancel_requests(self, *request_id: int):
-        with self.lock:
-            self.canceled_request.update(request_id)
+    def mark_canceled(self, request_id: int):
+        """mark request as canceled"""
+
+        with self._lock:
+            try:
+                del self.methods_map[request_id]
+            except KeyError:
+                pass
+            else:
+                # mark canceled if 'request_id' in 'request_map'
+                self.canceled_requests.add(request_id)
 
 
 class Client:
-    def __init__(self, transport: Transport, handler: BaseHandler):
+    def __init__(self, transport: Transport, handler: Handler):
         self._transport = weakref.ref(transport, lambda x: self._reset_state())
         self._handler = weakref.ref(handler, lambda x: self._reset_state())
 
@@ -360,44 +343,46 @@ class Client:
         self.transport.write(content)
 
     def _listen(self):
-        def listen_func():
+        def listen_message() -> RPCMessage:
             if not self.transport:
-                return
+                raise EOFError("transport is closed")
 
             content = self.transport.read()
-
             try:
                 message = RPCMessage.load(content)
             except json.JSONDecodeError as err:
-                LOGGER.exception("content: %s", content)
+                LOGGER.exception("content: '%s'", content)
                 raise err
 
-            try:
-                self.handle_message(message)
-            except Exception as err:
-                LOGGER.exception("message: %s", message)
-                raise err
+            return message
 
         while True:
             try:
-                listen_func()
+                message = listen_message()
+
             except EOFError:
+                # if stdout closed
                 break
 
             except Exception as err:
-                LOGGER.exception(err)
+                LOGGER.exception(err, exc_info=True)
                 self.terminate_server()
                 break
+
+            try:
+                self.handle_message(message)
+            except Exception:
+                LOGGER.exception("error handle message: %s", message, exc_info=True)
 
     def listen(self):
         thread = threading.Thread(target=self._listen, daemon=True)
         thread.start()
 
-    def server_running(self):
+    def is_server_running(self):
         return bool(self.transport) and self.transport.is_running()
 
-    def run_server(self, options: PopenOptions = None):
-        self.transport.run(options)
+    def run_server(self, env: Optional[dict] = None):
+        self.transport.run(env)
 
     def terminate_server(self):
         if self.transport:
@@ -430,7 +415,7 @@ class Client:
             result = self.handler.handle(message["method"], message["params"])
         except Exception as err:
             LOGGER.exception(err, exc_info=True)
-            error = RPCMessage.exception_to_message(err)
+            error = errors.transform_error(err)
 
         self.send_response(message["id"], result, error)
 
@@ -442,9 +427,9 @@ class Client:
 
     def handle_response(self, message: RPCMessage):
         try:
-            method = self.request_manager.get_request(message["id"])
-        except (Canceled, KeyError):
-            # handle exception here
+            method = self.request_manager.get_method(message["id"])
+        except Canceled:
+            # ignore canceled response
             return
 
         try:
@@ -453,14 +438,12 @@ class Client:
             LOGGER.exception(err, exc_info=True)
 
     def send_request(self, method: str, params: dict):
-        prev_request = self.request_manager.get_request_id(method)
-        if prev_request is not None:
-            # cancel previous request
-            self.request_manager.cancel_requests(prev_request)
+        # cancel previous request with same method
+        if prev_request := self.request_manager.get_request_id(method):
+            self.request_manager.mark_canceled(prev_request)
             self.send_notification("$/cancelRequest", {"id": prev_request})
 
-        self.request_manager.add_request(method)
-        req_id = self.request_manager.request_count
+        req_id = self.request_manager.add_method(method)
         self.send_message(RPCMessage.request(req_id, method, params))
 
     def send_notification(self, method: str, params: dict):

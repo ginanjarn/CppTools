@@ -1,40 +1,40 @@
-[	
+[
 	{
-		"caption" : "Format Code",
-		"mnemonic" : "F",
-		"id" : "cpptools",
-		"command" : "cpptools_document_formatting",
+		"caption": "Format Code",
+		"command": "cpp_tools_document_formatting",
+		"id": "cpp_tools",
+		"mnemonic": "F"
 	},
 	{
-		"caption" : "-",
-		"id" : "cpptools",
+		"caption": "-",
+		"id": "cpp_tools"
 	},
 	{
-		"caption" : "Show Declaration",
-		"mnemonic" : "l",
-		"id" : "cpptools",
-		"command" : "cpptools_goto_declaration",
+		"caption": "Show Declaration",
+		"command": "cpp_tools_goto_declaration",
+		"id": "cpp_tools",
+		"mnemonic": "c"
 	},
 	{
-		"caption" : "Show Definition",
-		"mnemonic" : "i",
-		"id" : "cpptools",
-		"command" : "cpptools_goto_definition",
+		"caption": "Show Definition",
+		"command": "cpp_tools_goto_definition",
+		"id": "cpp_tools",
+		"mnemonic": "D"
 	},
 	{
-		"caption" : "-",
-		"id" : "cpptools",
+		"caption": "-",
+		"id": "cpp_tools"
 	},
 	{
-		"caption" : "Code Action",
-		"mnemonic" : "A",
-		"id" : "cpptools",
-		"command" : "cpptools_code_action",
+		"caption": "Rename symbol...",
+		"command": "cpp_tools_prepare_rename",
+		"id": "cpp_tools",
+		"mnemonic": "R"
 	},
 	{
-		"caption" : "Rename symbol...",
-		"mnemonic" : "R",
-		"id" : "cpptools",
-		"command" : "cpptools_rename",
+		"caption": "Code Action...",
+		"command": "cpp_tools_code_action",
+		"id": "cpp_tools",
+		"mnemonic": "A"
 	}
 ]

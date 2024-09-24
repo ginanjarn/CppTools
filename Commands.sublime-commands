@@ -1,18 +1,26 @@
 [
 	{
+		"caption": "Cpp: Terminate server",
+		"command": "cpp_tools_terminate"
+	},
+	{
 		"caption" : "Format Code",
-		"command" : "cpptools_document_formatting",
+		"command" : "cpp_tools_document_formatting",
+	},
+	{
+		"caption" : "Show Declaration",
+		"command" : "cpp_tools_goto_declaration",
 	},
 	{
 		"caption" : "Show Definition",
-		"command" : "cpptools_goto_definition",
-	},
-	{
-		"caption" : "Code Action",
-		"command" : "cpptools_code_action",
+		"command" : "cpp_tools_goto_definition",
 	},
 	{
 		"caption" : "Rename symbol...",
-		"command" : "cpptools_rename",
+		"command" : "cpp_tools_prepare_rename",
+	},
+	{
+		"caption" : "Code Action...",
+		"command" : "cpp_tools_code_action",
 	}
 ]
