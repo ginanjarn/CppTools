@@ -343,8 +343,7 @@ class ApplyTextChangesCommand:
         cursor_move = 0
         for change in text_changes:
             replaced_region = change.moved_region(cursor_move)
-            self.view.erase(edit, replaced_region)
-            self.view.insert(edit, replaced_region.a, change.new_text)
+            self.view.replace(edit, replaced_region, change.new_text)
             cursor_move += change.cursor_move
 
     def relocate_selection(
