@@ -2,13 +2,14 @@
 
 import threading
 from collections import defaultdict, namedtuple
+from dataclasses import asdict
 from typing import Optional, List, Dict, Callable, Any
 
 import sublime
 
 from . import lsp_client
 
-from .constant import PACKAGE_NAME
+from .constant import PACKAGE_NAME, COMMAND_PREFIX
 from .errors import MethodNotFound
 from .workspace import (
     BufferedDocument,
@@ -74,11 +75,17 @@ class DiagnosticPanel:
         if not (self.panel and self.panel.is_valid()):
             self._create_panel()
 
-        # clear content
-        self.panel.run_command("select_all")
-        self.panel.run_command("left_delete")
+        lines = self.panel.lines(sublime.Region(0, self.panel.size()))
+        start = end = (0, 0)
+        if line_len := len(lines):
+            end_line_index = line_len - 1
+            end = [end_line_index, lines[end_line_index].size()]
 
-        self.panel.run_command("append", {"characters": text})
+        change = TextChange(start, end, text, -1)
+        self.panel.run_command(
+            f"{COMMAND_PREFIX}_apply_text_changes",
+            {"changes": [asdict(change)]},
+        )
 
     def show(self) -> None:
         """show output panel"""
