@@ -75,11 +75,8 @@ class DiagnosticPanel:
         if not (self.panel and self.panel.is_valid()):
             self._create_panel()
 
-        lines = self.panel.lines(sublime.Region(0, self.panel.size()))
-        start = end = (0, 0)
-        if line_len := len(lines):
-            end_line_index = line_len - 1
-            end = [end_line_index, lines[end_line_index].size()]
+        start = (0, 0)
+        end = self.panel.rowcol(self.panel.size())
 
         change = TextChange(start, end, text, -1)
         self.panel.run_command(
