@@ -2,7 +2,6 @@
 
 import logging
 import threading
-from dataclasses import dataclass
 from typing import List, Optional
 
 import sublime
@@ -303,15 +302,18 @@ class CodeActionCommand:
             self.handler.textdocument_code_action(self.view, start, end)
 
 
-@dataclass
 class _BufferedTextChange:
-    """"""
+    __slots__ = ["region", "old_text", "new_text"]
 
-    region: sublime.Region
-    new_text: str
-    cursor_move: int = 0
+    def __init__(self, region: sublime.Region, old_text: str, new_text: str) -> None:
+        self.region = region
+        self.old_text = old_text
+        self.new_text = new_text
 
-    def moved_region(self, move: int) -> sublime.Region:
+    def offset_move(self) -> int:
+        return len(self.new_text) - len(self.old_text)
+
+    def get_moved_region(self, move: int) -> sublime.Region:
         return sublime.Region(self.region.a + move, self.region.b + move)
 
 
@@ -322,29 +324,28 @@ class ApplyTextChangesCommand:
         self.view: sublime.View
 
     def _run(self, edit: sublime.Edit, changes: List[dict]):
-        text_changes = [self.to_text_change(self.view, c) for c in changes]
+        text_changes = [self.to_text_change(c) for c in changes]
         active_selection = list(self.view.sel())
 
         self.apply(edit, text_changes)
         self.relocate_selection(active_selection, text_changes)
 
-    @staticmethod
-    def to_text_change(view: sublime.View, change: dict) -> _BufferedTextChange:
-        change = TextChange(**change)
-        start_point = view.text_point(*change.start)
-        end_point = view.text_point(*change.end)
-
-        region = sublime.Region(start_point, end_point)
-        cursor_move = len(change.text) - region.size()
-
-        return _BufferedTextChange(region, change.text, cursor_move)
-
     def apply(self, edit: sublime.Edit, text_changes: List[_BufferedTextChange]):
-        cursor_move = 0
+        move = 0
         for change in text_changes:
-            replaced_region = change.moved_region(cursor_move)
+            replaced_region = change.get_moved_region(move)
             self.view.replace(edit, replaced_region, change.new_text)
-            cursor_move += change.cursor_move
+            move += change.offset_move()
+
+    def to_text_change(self, change: dict) -> _BufferedTextChange:
+        change = TextChange(**change)
+
+        start = self.view.text_point(*change.start)
+        end = self.view.text_point(*change.end)
+        region = sublime.Region(start, end)
+        old_text = self.view.substr(region)
+
+        return _BufferedTextChange(region, old_text, change.text)
 
     def relocate_selection(
         self, selections: List[sublime.Region], changes: List[_BufferedTextChange]
@@ -355,8 +356,8 @@ class ApplyTextChangesCommand:
             temp_selection = selection
             for change in changes:
                 if temp_selection.begin() > change.region.begin():
-                    temp_selection.a += change.cursor_move
-                    temp_selection.b += change.cursor_move
+                    temp_selection.a += change.offset_move()
+                    temp_selection.b += change.offset_move()
 
             moved_selections.append(temp_selection)
 
