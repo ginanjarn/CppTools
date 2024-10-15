@@ -8,7 +8,7 @@ from collections import namedtuple
 from dataclasses import dataclass, asdict
 from functools import wraps, lru_cache
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import urlparse, unquote_plus
 from urllib.request import url2pathname
 
@@ -98,46 +98,66 @@ class TextHighlighter:
                 view.erase_regions(TextHighlighter.REGIONS_KEY)
 
 
+class _UnbufferedTextChange:
+    __slots__ = ["span", "old_text", "new_text"]
+
+    def __init__(self, span: Tuple[int, int], old_text: str, new_text: str) -> None:
+        self.span = span
+        self.old_text = old_text
+        self.new_text = new_text
+
+    def offset_move(self) -> int:
+        return len(self.new_text) - len(self.old_text)
+
+    def get_moved_span(self, move: int) -> Tuple[int, int]:
+        return (self.span[0] + move, self.span[1] + move)
+
+
 class UnbufferedDocument:
     def __init__(self, file_name: PathStr):
         self.file_name = file_name
         self.text = Path(file_name).read_text()
+        self.is_saved = True
+
+        self._cached_lines = []
+
+    def lines(self) -> List[str]:
+        if not all([self.is_saved, self._cached_lines]):
+            self._cached_lines = self.text.splitlines(keepends=True)
+        return self._cached_lines
 
     def apply_text_changes(self, changes: List[TextChange]):
+        self.is_saved = False
         self.text = self._update_text(self.text, changes)
 
-    @staticmethod
-    def get_offset(lines: List[str], row: int, column: int) -> int:
-        line_offset = sum([len(l) for l in lines[:row]])
-        return line_offset + column
+    def _update_text(self, source: str, changes: List[TextChange]) -> str:
+        text_changes = [self.to_text_change(c) for c in changes]
 
-    @staticmethod
-    def _update_text(source: str, changes: List[TextChange]) -> str:
         temp = source
-
-        for change in changes:
-            try:
-                start = change.start
-                end = change.end
-                new_text = change.text
-
-                start_line, start_character = start[0], start[1]
-                end_line, end_character = end[0], end[1]
-
-            except KeyError as err:
-                raise Exception(f"invalid params {err}") from err
-
-            lines = source.splitlines(keepends=True)
-            start_offset = UnbufferedDocument.get_offset(
-                lines, start_line, start_character
-            )
-            end_offset = UnbufferedDocument.get_offset(lines, end_line, end_character)
-            temp = f"{temp[:start_offset]}{new_text}{temp[end_offset:]}"
+        move = 0
+        for change in text_changes:
+            start_offset, end_offset = change.get_moved_span(move)
+            temp = f"{temp[:start_offset]}{change.new_text}{temp[end_offset:]}"
+            move += change.offset_move()
 
         return temp
 
+    def calculate_offset(self, row: int, column: int) -> int:
+        line_offset = sum([len(l) for l in self.lines()[:row]])
+        return line_offset + column
+
+    def to_text_change(self, change: TextChange) -> _UnbufferedTextChange:
+        start = self.calculate_offset(*change.start)
+        end = self.calculate_offset(*change.end)
+
+        old_text = self.text[start:end]
+        new_text = change.text
+
+        return _UnbufferedTextChange((start, end), old_text, new_text)
+
     def save(self):
         Path(self.file_name).write_text(self.text)
+        self.is_saved = True
 
 
 class BufferedDocument:
