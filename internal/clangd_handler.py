@@ -83,6 +83,7 @@ class ClangdHandler(BaseHandler):
 
     def __init__(self, transport: lsp_client.Transport):
         super().__init__(transport)
+        self.diagnostic_manager = DiagnosticManager()
 
         self.handler_map.update(
             {
@@ -157,6 +158,7 @@ class ClangdHandler(BaseHandler):
         self.client.send_notification("initialized", {})
         self._initializing = False
 
+        self.diagnostic_manager.reset()
         self.session.begin()
 
     def handle_window_logmessage(self, params: dict):
@@ -222,8 +224,10 @@ class ClangdHandler(BaseHandler):
             if self.workspace.get_documents(file_name):
                 return
 
-            self.workspace.remove_invalid_diagnostic()
-            DiagnosticReporter(self.workspace, self.diagnostics_panel).show_report()
+            self.diagnostic_manager.remove(file_name)
+            DiagnosticReporter(
+                self.diagnostic_manager.get_all(), self.diagnostic_panel
+            ).show_report()
 
             self.client.send_notification(
                 "textDocument/didClose",
@@ -354,8 +358,10 @@ class ClangdHandler(BaseHandler):
         file_name = uri_to_path(params["uri"])
         diagnostics = params["diagnostics"]
 
-        self.workspace.set_diagnostic(file_name, diagnostics)
-        DiagnosticReporter(self.workspace, self.diagnostics_panel).show_report()
+        self.diagnostic_manager.add(file_name, diagnostics)
+        DiagnosticReporter(
+            self.diagnostic_manager.get_all(), self.diagnostic_panel
+        ).show_report()
 
         for document in self.workspace.get_documents(file_name):
             regions = [
@@ -538,9 +544,7 @@ class ClangdHandler(BaseHandler):
                 method,
                 {
                     "context": {
-                        "diagnostics": self.workspace.get_diagnostic(
-                            document.file_name
-                        ),
+                        "diagnostics": self.diagnostic_manager.get(document.file_name),
                         "triggerKind": 2,
                     },
                     "range": {
@@ -580,18 +584,51 @@ class ClangdHandler(BaseHandler):
         sublime.active_window().show_quick_panel(items, on_select=on_select)
 
 
+class DiagnosticManager:
+    def __init__(self) -> None:
+        self.diagnostics: Dict[PathStr, dict] = {}
+        self._lock = threading.Lock()
+
+    def reset(self):
+        with self._lock:
+            self.diagnostics.clear()
+
+    def get_all(self) -> Dict[PathStr, dict]:
+        with self._lock:
+            return self.diagnostics
+
+    def get(self, file_name: PathStr) -> Optional[dict]:
+        with self._lock:
+            try:
+                return self.diagnostics[file_name]
+            except KeyError:
+                return None
+
+    def add(self, file_name: PathStr, diagnostics: dict):
+        with self._lock:
+            self.diagnostics[file_name] = diagnostics
+
+    def remove(self, file_name: PathStr):
+        with self._lock:
+            try:
+                del self.diagnostics[file_name]
+            except KeyError:
+                pass
+
+
 class DiagnosticReporter:
-    def __init__(self, workspace_: Workspace, diagnostics_panel: DiagnosticPanel):
-        self.workspace = workspace_
-        self.diagnostics_panel = diagnostics_panel
+    def __init__(
+        self, diagnostic_map: Dict[PathStr, dict], diagnostic_panel: DiagnosticPanel
+    ):
+        self.diagnostic_map = diagnostic_map
+        self.diagnostic_panel = diagnostic_panel
 
     def show_report(self):
         """"""
-        diagnostic_map = self.workspace.get_diagnostics()
-        report_text = self._build_report(diagnostic_map)
+        report_text = self._build_report(self.diagnostic_map)
 
-        self.diagnostics_panel.set_content(report_text)
-        self.diagnostics_panel.show()
+        self.diagnostic_panel.set_content(report_text)
+        self.diagnostic_panel.show()
 
     def _build_report(self, diagnostics_map: Dict[PathStr, Any]) -> str:
         reports = []

@@ -6,7 +6,7 @@ import threading
 import time
 from collections import namedtuple
 from dataclasses import dataclass, asdict
-from functools import wraps, lru_cache
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import urlparse, unquote_plus
@@ -253,97 +253,54 @@ class Workspace:
         # If we map by file name, one document my related to multiple 'View'
         # and some times the 'View' is invalid.
         self.documents: Dict[sublime.View, BufferedDocument] = {}
-        self.diagnostics: Dict[str, dict] = {}
+        self._lock = threading.Lock()
 
-    document_lock = threading.Lock()
-    diagnostic_lock = threading.RLock()
+    def reset(self):
+        """"""
+        with self._lock:
+            self.documents.clear()
 
-    def lock(locker: threading.Lock):
-        def wrapper1(func):
-            @wraps(func)
-            def wrapper2(*args, **kwargs):
-                with locker:
-                    return func(*args, **kwargs)
-
-            return wrapper2
-
-        return wrapper1
-
-    @lock(document_lock)
     def get_document(
         self, view: sublime.View, /, default: Any = None
     ) -> Optional[BufferedDocument]:
-        return self.documents.get(view, default)
+        with self._lock:
+            return self.documents.get(view, default)
 
-    @lock(document_lock)
     def add_document(self, document: BufferedDocument):
-        self.documents[document.view] = document
+        with self._lock:
+            self.documents[document.view] = document
 
-    @lock(document_lock)
     def remove_document(self, view: sublime.View):
-        try:
-            del self.documents[view]
-        except KeyError as err:
-            LOGGER.debug("document not found %s", err)
-            pass
+        with self._lock:
+            try:
+                del self.documents[view]
+            except KeyError as err:
+                LOGGER.debug("document not found %s", err)
+                pass
 
-    @lock(document_lock)
     def get_document_by_name(
         self, file_name: PathStr, /, default: Any = None
     ) -> Optional[BufferedDocument]:
         """get document by name"""
 
-        for view, document in self.documents.items():
-            if view.file_name() == file_name:
-                return document
-        return default
+        with self._lock:
+            for view, document in self.documents.items():
+                if view.file_name() == file_name:
+                    return document
+            return default
 
-    @lock(document_lock)
     def get_documents(
         self, file_name: Optional[PathStr] = None
     ) -> List[BufferedDocument]:
         """get documents.
         If file_name assigned, return documents with file_name filtered.
         """
-        if not file_name:
-            return [doc for _, doc in self.documents.items()]
-        return [doc for _, doc in self.documents.items() if doc.file_name == file_name]
-
-    @lock(diagnostic_lock)
-    def get_diagnostic(self, file_name: PathStr) -> Dict[str, Any]:
-        return self.diagnostics.get(file_name)
-
-    @lock(diagnostic_lock)
-    def get_diagnostics(self) -> Dict[PathStr, Dict[str, Any]]:
-        # return copy to prevent 'RuntimeError' during iteration
-        return dict(self.diagnostics)
-
-    @lock(diagnostic_lock)
-    def set_diagnostic(self, file_name: PathStr, diagnostic: dict):
-        self.diagnostics[file_name] = diagnostic
-
-    @lock(diagnostic_lock)
-    def remove_diagnostic(self, file_name: PathStr):
-        try:
-            del self.diagnostics[file_name]
-        except KeyError as err:
-            LOGGER.debug("diagnostic not found %s", err)
-            pass
-
-    @lock(document_lock)
-    @lock(diagnostic_lock)
-    def remove_invalid_diagnostic(self):
-        """remove invalid diagnostic"""
-
-        document_names = {doc.file_name for _, doc in self.documents.items()}
-        diagnostic_keys = set(self.diagnostics.keys())
-
-        invalid_keys = diagnostic_keys.difference(document_names)
-        self.diagnostics = {
-            file_name: diagnostic
-            for file_name, diagnostic in self.diagnostics.items()
-            if file_name not in invalid_keys
-        }
+        with self._lock:
+            if not file_name:
+                return [doc for _, doc in self.documents.items()]
+            return [
+                doc for _, doc in self.documents.items() if doc.file_name == file_name
+            ]
 
 
 def is_valid_document(view: sublime.View) -> bool:
