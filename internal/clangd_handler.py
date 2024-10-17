@@ -84,6 +84,7 @@ class ClangdHandler(BaseHandler):
     def __init__(self, transport: lsp_client.Transport):
         super().__init__(transport)
         self.diagnostic_manager = DiagnosticManager()
+        self.hover_location = -1
 
         self.handler_map.update(
             {
@@ -281,6 +282,7 @@ class ClangdHandler(BaseHandler):
                 },
             )
             self.action_target_map[method] = document
+            self.hover_location = (row, col)
 
     def handle_textdocument_hover(self, params: dict):
         method = "textDocument/hover"
@@ -289,8 +291,12 @@ class ClangdHandler(BaseHandler):
 
         elif result := params.get("result"):
             message = result["contents"]["value"]
-            start = result["range"]["start"]
-            row, col = start["line"], start["character"]
+            try:
+                start = result["range"]["start"]
+                row, col = start["line"], start["character"]
+            except KeyError:
+                row, col = self.hover_location
+
             self.action_target_map[method].show_popup(message, row, col)
 
     @session.must_begin
