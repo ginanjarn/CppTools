@@ -9,4 +9,7 @@
 	// File indexing parses all files in the sidebar, and builds an index of
 	// their symbols. This is required for Goto Definition to work.
 	"index_files": false,
+	
+	// Cancel completion pattern.
+	"cancel_completion_pattern": "(?:.*;)$",
 }

@@ -1,6 +1,7 @@
 """plugin implementation"""
 
 import logging
+import re
 import threading
 from typing import List, Optional
 
@@ -9,6 +10,7 @@ from sublime import HoverZone
 
 from .handler import BaseHandler
 from .constant import LOGGING_CHANNEL
+from .sublime_settings import Settings
 from .workspace import TextChange, is_valid_document
 
 LOGGER = logging.getLogger(LOGGING_CHANNEL)
@@ -127,7 +129,11 @@ class CompletionEventListener:
 
     def __init__(self, *args, **kwargs):
         self.handler: BaseHandler
+
         self.prev_completion_point = 0
+        with Settings() as settings:
+            pattern = settings.get("cancel_completion_pattern") or "$"
+        self.cancel_completion_pattern = re.compile(pattern)
 
     def _is_completion_valid(self, view: sublime.View, point: int) -> bool:
         """is completion valid at point"""
@@ -151,6 +157,12 @@ class CompletionEventListener:
 
         # check point in valid source
         if not is_valid_document(view):
+            return None
+
+        if (
+            word_str := view.substr(view.word(point))
+        ) and self.cancel_completion_pattern.match(word_str):
+            view.run_command("hide_auto_complete")
             return None
 
         if (
