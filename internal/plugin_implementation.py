@@ -135,17 +135,17 @@ class CompletionEventListener:
             pattern = settings.get("cancel_completion_pattern") or "$"
         self.cancel_completion_pattern = re.compile(pattern)
 
-    def _is_completion_valid(self, view: sublime.View, point: int) -> bool:
-        """is completion valid at point"""
+    def _is_context_changed(self, view: sublime.View, point: int) -> bool:
+        """"""
 
         # point unchanged
         if point == self.prev_completion_point:
-            return True
+            return False
         # point changed but still in same word
         word = view.word(self.prev_completion_point)
         if view.substr(word).isidentifier() and point in word:
-            return True
-        return False
+            return False
+        return True
 
     def _on_query_completions(
         self, view: sublime.View, prefix: str, locations: List[int]
@@ -170,13 +170,11 @@ class CompletionEventListener:
         ) and document.is_completion_available():
 
             items = document.pop_completion()
-            if items and self._is_completion_valid(view, point):
-                return sublime.CompletionList(
-                    items, flags=sublime.INHIBIT_WORD_COMPLETIONS
-                )
+            if self._is_context_changed(view, point) or (not items):
+                document.hide_completion()
+                return
 
-            document.hide_completion()
-            return None
+            return sublime.CompletionList(items, flags=sublime.INHIBIT_WORD_COMPLETIONS)
 
         self.prev_completion_point = point
 
