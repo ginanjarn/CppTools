@@ -3,14 +3,17 @@
 import logging
 import threading
 
+from collections import namedtuple
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Callable
 
 import sublime
 
 from . import lsp_client
 from .constant import (
+    PACKAGE_NAME,
     COMMAND_PREFIX,
     LOGGING_CHANNEL,
 )
@@ -83,7 +86,9 @@ class ClangdHandler(BaseHandler):
 
     def __init__(self, transport: lsp_client.Transport):
         super().__init__(transport)
-        self.diagnostic_manager = DiagnosticManager()
+        self.diagnostic_manager = DiagnosticManager(
+            DiagnosticReportSettings(show_panel=False)
+        )
         self.hover_location = -1
 
         self.handler_map.update(
@@ -114,6 +119,7 @@ class ClangdHandler(BaseHandler):
     def terminate(self):
         """exit session"""
         self.client.terminate_server()
+        self.diagnostic_manager.reset()
         self._reset_state()
 
     def initialize(self, view: sublime.View):
@@ -175,6 +181,7 @@ class ClangdHandler(BaseHandler):
             return
 
         file_name = view.file_name()
+        self.diagnostic_manager.set_active_view(view)
 
         if opened_document := self.workspace.get_document(view):
             if opened_document.file_name == file_name and (not reload):
@@ -218,17 +225,13 @@ class ClangdHandler(BaseHandler):
     @session.must_begin
     def textdocument_didclose(self, view: sublime.View):
         file_name = view.file_name()
+        self.diagnostic_manager.remove(view)
         if document := self.workspace.get_document(view):
             self.workspace.remove_document(view)
 
             # if document still opened in other View
             if self.workspace.get_documents(file_name):
                 return
-
-            self.diagnostic_manager.remove(file_name)
-            DiagnosticReporter(
-                self.diagnostic_manager.get_all(), self.diagnostic_panel
-            ).show_report()
 
             self.client.send_notification(
                 "textDocument/didClose",
@@ -265,6 +268,24 @@ class ClangdHandler(BaseHandler):
                 },
             )
 
+    def _get_diagnostic_message(self, view: sublime.View, row: int, col: int):
+        point = view.text_point(row, col)
+
+        def contain_point(item: DiagnosticItem):
+            return item.region.contains(point)
+
+        diagnostics = self.diagnostic_manager.get_active_view_diagnostics(contain_point)
+        if not diagnostics:
+            return ""
+
+        title = "### Diagnostics:\n"
+        diagnostic_message = "\n".join([f"- {d.message}" for d in diagnostics])
+        command_url = sublime.command_url(
+            f"{COMMAND_PREFIX}_code_action", {"event": {"text_point": point}}
+        )
+        footer = f'***\n<a href="{command_url}">Code Action</a>'
+        return f"{title}\n{diagnostic_message}\n{footer}"
+
     @session.must_begin
     def textdocument_hover(self, view, row, col):
         method = "textDocument/hover"
@@ -274,6 +295,10 @@ class ClangdHandler(BaseHandler):
             other.view.hide_popup()
 
         if document := self.workspace.get_document(view):
+            if message := self._get_diagnostic_message(view, row, col):
+                document.show_popup(message, row, col)
+                return
+
             self.client.send_request(
                 method,
                 {
@@ -350,31 +375,12 @@ class ClangdHandler(BaseHandler):
             items = [self._build_completion(item) for item in result["items"]]
             self.action_target_map[method].show_completion(items)
 
-    @staticmethod
-    def _get_diagnostic_region(view: sublime.View, diagnostic: dict) -> sublime.Region:
-
-        start = diagnostic["range"]["start"]
-        end = diagnostic["range"]["end"]
-
-        start_point = view.text_point(start["line"], start["character"])
-        end_point = view.text_point(end["line"], end["character"])
-        return sublime.Region(start_point, end_point)
-
     def handle_textdocument_publishdiagnostics(self, params: dict):
         file_name = uri_to_path(params["uri"])
         diagnostics = params["diagnostics"]
 
-        self.diagnostic_manager.add(file_name, diagnostics)
-        DiagnosticReporter(
-            self.diagnostic_manager.get_all(), self.diagnostic_panel
-        ).show_report()
-
         for document in self.workspace.get_documents(file_name):
-            regions = [
-                self._get_diagnostic_region(document.view, diagnostic)
-                for diagnostic in diagnostics
-            ]
-            document.highlight_text(regions)
+            self.diagnostic_manager.update(document.view, diagnostics)
 
     @staticmethod
     def _get_text_change(change: dict) -> TextChange:
@@ -550,7 +556,7 @@ class ClangdHandler(BaseHandler):
                 method,
                 {
                     "context": {
-                        "diagnostics": self.diagnostic_manager.get(document.file_name),
+                        "diagnostics": self.diagnostic_manager.get(view),
                         "triggerKind": 2,
                     },
                     "range": {
@@ -590,74 +596,145 @@ class ClangdHandler(BaseHandler):
         sublime.active_window().show_quick_panel(items, on_select=on_select)
 
 
+class DiagnosticItem:
+    __slots__ = ["severity", "region", "message"]
+
+    def __init__(self, severity: int, region: sublime.Region, message: str) -> None:
+        self.severity = severity
+        self.region = region
+        self.message = message
+
+    def __repr__(self) -> str:
+        text = "DiagnosticItem(severity=%s, region=%s, message='%s')"
+        return text % (self.severity, self.region, self.message)
+
+
+@dataclass
+class DiagnosticReportSettings:
+    highlight_text: bool = True
+    show_status: bool = True
+    show_panel: bool = False
+
+
 class DiagnosticManager:
-    def __init__(self) -> None:
-        self.diagnostics: Dict[PathStr, dict] = {}
-        self._lock = threading.Lock()
+    def __init__(self, settings: DiagnosticReportSettings = None) -> None:
+        self.settings = settings or DiagnosticReportSettings()
+        self.diagnostics: Dict[sublime.View, List[dict]] = {}
+        self.active_view: sublime.View = None
+        self.panel = DiagnosticPanel()
+
+        self._change_lock = threading.Lock()
+        self._active_view_diagnostics: List[DiagnosticItem] = []
 
     def reset(self):
-        with self._lock:
-            self.diagnostics.clear()
+        # erase regions
+        for view in self.diagnostics.keys():
+            view.erase_regions(self.REGIONS_KEY)
 
-    def get_all(self) -> Dict[PathStr, dict]:
-        with self._lock:
-            return self.diagnostics
+        self.diagnostics = {}
+        self.active_view = None
+        self.panel.destroy()
 
-    def get(self, file_name: PathStr) -> Optional[dict]:
-        with self._lock:
+        self._active_view_diagnostics = []
+
+    def get(self, view: sublime.View) -> List[dict]:
+        with self._change_lock:
+            return self.diagnostics.get(view, [])
+
+    def update(self, view: sublime.View, diagostics: List[dict]):
+        with self._change_lock:
+            self.diagnostics.update({view: diagostics})
+            self._on_diagnostic_changed()
+
+    def remove(self, view: sublime.View):
+        with self._change_lock:
             try:
-                return self.diagnostics[file_name]
-            except KeyError:
-                return None
-
-    def add(self, file_name: PathStr, diagnostics: dict):
-        with self._lock:
-            self.diagnostics[file_name] = diagnostics
-
-    def remove(self, file_name: PathStr):
-        with self._lock:
-            try:
-                del self.diagnostics[file_name]
+                del self.diagnostics[view]
             except KeyError:
                 pass
+            self._on_diagnostic_changed()
 
+    def set_active_view(self, view: sublime.View):
+        if view == self.active_view:
+            return
 
-class DiagnosticReporter:
-    def __init__(
-        self, diagnostic_map: Dict[PathStr, dict], diagnostic_panel: DiagnosticPanel
-    ):
-        self.diagnostic_map = diagnostic_map
-        self.diagnostic_panel = diagnostic_panel
+        self.active_view = view
+        self._on_diagnostic_changed()
 
-    def show_report(self):
-        """"""
-        report_text = self._build_report(self.diagnostic_map)
+    def get_active_view_diagnostics(
+        self, predicate: Callable[[DiagnosticItem], bool] = None
+    ) -> List[DiagnosticItem]:
+        if not predicate:
+            return self._active_view_diagnostics
 
-        self.diagnostic_panel.set_content(report_text)
-        self.diagnostic_panel.show()
+        return [d for d in self._active_view_diagnostics if predicate(d)]
 
-    def _build_report(self, diagnostics_map: Dict[PathStr, Any]) -> str:
-        reports = []
+    LineCharacter = namedtuple("LineCharacter", ["line", "character"])
 
-        # build report for each file
-        for file_name, diagnostics in diagnostics_map.items():
-            lines = [self.build_line(file_name, d) for d in diagnostics]
-            reports.extend(lines)
+    def _to_diagnostic_item(
+        self, view: sublime.View, diagnostic: dict, /
+    ) -> DiagnosticItem:
 
-        return "\n".join(reports)
-
-    @staticmethod
-    def build_line(file_name: PathStr, diagnostic: dict) -> str:
-        short_name = Path(file_name).name
-        row = diagnostic["range"]["start"]["line"]
-        col = diagnostic["range"]["start"]["character"]
+        start = self.LineCharacter(**diagnostic["range"]["start"])
+        end = self.LineCharacter(**diagnostic["range"]["end"])
+        region = sublime.Region(view.text_point(*start), view.text_point(*end))
         message = diagnostic["message"]
-        source = diagnostic.get("source", "")
+        if source := diagnostic.get("source"):
+            message += f" ({source})"
 
-        # natural line index start with 1
-        row += 1
+        return DiagnosticItem(diagnostic["severity"], region, message)
 
-        return f"{short_name}:{row}:{col}: {message} ({source})"
+    def _update_active_view_diagnostics(self):
+        self._active_view_diagnostics = [
+            self._to_diagnostic_item(self.active_view, diagnostic)
+            for diagnostic in self.diagnostics.get(self.active_view, [])
+        ]
+
+    def _on_diagnostic_changed(self):
+        self._update_active_view_diagnostics()
+
+        if self.settings.highlight_text:
+            self._highlight_regions(self.active_view)
+        if self.settings.show_status:
+            self._show_status(self.active_view)
+        if self.settings.show_panel:
+            self._show_panel(self.active_view)
+
+    REGIONS_KEY = f"{PACKAGE_NAME}_DIAGNOSTIC_REGIONS"
+
+    def _highlight_regions(self, view: sublime.View):
+        regions = [item.region for item in self._active_view_diagnostics]
+        view.add_regions(
+            key=self.REGIONS_KEY,
+            regions=regions,
+            scope="invalid",
+            icon="dot",
+            flags=sublime.DRAW_NO_FILL
+            | sublime.DRAW_NO_OUTLINE
+            | sublime.DRAW_SQUIGGLY_UNDERLINE,
+        )
+
+    STATUS_KEY = f"{PACKAGE_NAME}_DIAGNOSTIC_STATUS"
+
+    def _show_status(self, view: sublime.View):
+        value = "ERROR %s, WARNING %s"
+        err_count = len(
+            [item for item in self._active_view_diagnostics if item.severity == 1]
+        )
+        warn_count = len(self._active_view_diagnostics) - err_count
+        view.set_status(self.STATUS_KEY, value % (err_count, warn_count))
+
+    def _show_panel(self, view: sublime.View):
+        def wrap_location(view: sublime.View, item: DiagnosticItem):
+            short_name = Path(view.file_name()).name
+            row, col = view.rowcol(item.region.begin())
+            return f"{short_name}:{row+1}:{col} {item.message}"
+
+        content = "\n".join(
+            [wrap_location(view, item) for item in self._active_view_diagnostics]
+        )
+        self.panel.set_content(content)
+        self.panel.show()
 
 
 class WorkspaceEdit:
