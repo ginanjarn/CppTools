@@ -24,15 +24,17 @@ from .handler import (
     input_text,
     open_location,
 )
-from .sublime_settings import Settings
-from .workspace import (
-    Workspace,
+from .document import (
     BufferedDocument,
     UnbufferedDocument,
     TextChange,
-    get_workspace_path,
     path_to_uri,
     uri_to_path,
+)
+from .sublime_settings import Settings
+from .workspace import (
+    Workspace,
+    get_workspace_path,
 )
 
 PathStr = str

@@ -10,12 +10,13 @@ import sublime
 from . import lsp_client
 
 from .constant import PACKAGE_NAME, COMMAND_PREFIX
+from .document import (
+    BufferedDocument,
+    TextChange,
+)
 from .errors import MethodNotFound
 from .workspace import (
-    BufferedDocument,
     Workspace,
-    TextChange,
-    TextHighlighter,
     open_document,
 )
 

@@ -8,10 +8,10 @@ from typing import List, Optional
 import sublime
 from sublime import HoverZone
 
+from .document import TextChange, is_valid_document
 from .handler import BaseHandler
 from .constant import LOGGING_CHANNEL
 from .sublime_settings import Settings
-from .workspace import TextChange, is_valid_document
 
 LOGGER = logging.getLogger(LOGGING_CHANNEL)
 
