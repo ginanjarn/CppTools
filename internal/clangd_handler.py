@@ -301,6 +301,8 @@ class ClangdHandler(BaseHandler):
                 document.show_popup(message, row, col)
                 return
 
+            self.action_target_map[method] = document
+            self.hover_location = (row, col)
             self.client.send_request(
                 method,
                 {
@@ -308,8 +310,6 @@ class ClangdHandler(BaseHandler):
                     "textDocument": {"uri": path_to_uri(document.file_name)},
                 },
             )
-            self.action_target_map[method] = document
-            self.hover_location = (row, col)
 
     def handle_textdocument_hover(self, params: dict):
         method = "textDocument/hover"
@@ -330,6 +330,7 @@ class ClangdHandler(BaseHandler):
     def textdocument_completion(self, view, row, col):
         method = "textDocument/completion"
         if document := self.workspace.get_document(view):
+            self.action_target_map[method] = document
             self.client.send_request(
                 method,
                 {
@@ -337,7 +338,6 @@ class ClangdHandler(BaseHandler):
                     "textDocument": {"uri": path_to_uri(document.file_name)},
                 },
             )
-            self.action_target_map[method] = document
 
     @staticmethod
     def _build_completion(completion_item: dict) -> sublime.CompletionItem:
@@ -403,6 +403,7 @@ class ClangdHandler(BaseHandler):
     def textdocument_formatting(self, view):
         method = "textDocument/formatting"
         if document := self.workspace.get_document(view):
+            self.action_target_map[method] = document
             self.client.send_request(
                 method,
                 {
@@ -410,7 +411,6 @@ class ClangdHandler(BaseHandler):
                     "textDocument": {"uri": path_to_uri(document.file_name)},
                 },
             )
-            self.action_target_map[method] = document
 
     def handle_textdocument_formatting(self, params: dict):
         method = "textDocument/formatting"
@@ -442,6 +442,7 @@ class ClangdHandler(BaseHandler):
     def textdocument_declaration(self, view, row, col):
         method = "textDocument/declaration"
         if document := self.workspace.get_document(view):
+            self.action_target_map[method] = document
             self.client.send_request(
                 method,
                 {
@@ -449,7 +450,6 @@ class ClangdHandler(BaseHandler):
                     "textDocument": {"uri": path_to_uri(document.file_name)},
                 },
             )
-            self.action_target_map[method] = document
 
     def handle_textdocument_declaration(self, params: dict):
         method = "textDocument/declaration"
@@ -464,6 +464,7 @@ class ClangdHandler(BaseHandler):
     def textdocument_definition(self, view, row, col):
         method = "textDocument/definition"
         if document := self.workspace.get_document(view):
+            self.action_target_map[method] = document
             self.client.send_request(
                 method,
                 {
@@ -471,7 +472,6 @@ class ClangdHandler(BaseHandler):
                     "textDocument": {"uri": path_to_uri(document.file_name)},
                 },
             )
-            self.action_target_map[method] = document
 
     @staticmethod
     def _build_location(location: dict) -> PathEncodedStr:
@@ -493,6 +493,7 @@ class ClangdHandler(BaseHandler):
     def textdocument_preparerename(self, view, row, col):
         method = "textDocument/prepareRename"
         if document := self.workspace.get_document(view):
+            self.action_target_map[method] = document
             self.client.send_request(
                 method,
                 {
@@ -500,12 +501,12 @@ class ClangdHandler(BaseHandler):
                     "textDocument": {"uri": path_to_uri(document.file_name)},
                 },
             )
-            self.action_target_map[method] = document
 
     @session.must_begin
     def textdocument_rename(self, view, row, col, new_name):
         method = "textDocument/rename"
         if document := self.workspace.get_document(view):
+            self.action_target_map[method] = document
             self.client.send_request(
                 method,
                 {
@@ -514,7 +515,6 @@ class ClangdHandler(BaseHandler):
                     "textDocument": {"uri": path_to_uri(document.file_name)},
                 },
             )
-            self.action_target_map[method] = document
 
     def _handle_preparerename(self, location: dict):
         method = "textDocument/prepareRename"
@@ -554,6 +554,7 @@ class ClangdHandler(BaseHandler):
     def textdocument_code_action(self, view, start, end):
         method = "textDocument/codeAction"
         if document := self.workspace.get_document(view):
+            self.action_target_map[method] = document
             self.client.send_request(
                 method,
                 {
@@ -568,7 +569,6 @@ class ClangdHandler(BaseHandler):
                     "textDocument": {"uri": path_to_uri(document.file_name)},
                 },
             )
-            self.action_target_map[method] = document
 
     def handle_textdocument_code_action(self, params: dict):
         if error := params.get("error"):
