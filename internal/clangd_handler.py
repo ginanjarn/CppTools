@@ -6,6 +6,7 @@ import threading
 from collections import namedtuple
 from dataclasses import dataclass
 from functools import wraps
+from html import escape as escape_html
 from pathlib import Path
 from typing import Optional, Dict, List, Callable
 
@@ -281,7 +282,9 @@ class ClangdHandler(BaseHandler):
             return ""
 
         title = "### Diagnostics:\n"
-        diagnostic_message = "\n".join([f"- {d.message}" for d in diagnostics])
+        diagnostic_message = "\n".join(
+            [f"- {escape_html(d.message)}" for d in diagnostics]
+        )
         command_url = sublime.command_url(
             f"{COMMAND_PREFIX}_code_action", {"event": {"text_point": point}}
         )
