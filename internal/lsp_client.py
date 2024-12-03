@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Dict, Set
 
 from . import errors
 from .constant import LOGGING_CHANNEL
@@ -20,37 +20,30 @@ from .constant import LOGGING_CHANNEL
 LOGGER = logging.getLogger(LOGGING_CHANNEL)
 
 
-class Handler(ABC):
-    """Base handler"""
-
-    @abstractmethod
-    def handle(self, method: str, params: dict) -> Optional[dict]:
-        """handle message"""
+class MethodName(str):
+    """Method name"""
 
 
 class RPCMessage(dict):
     """rpc message"""
 
     @classmethod
-    def request(cls, id, method, params):
+    def request(cls, id: int, method: MethodName, params: dict):
         return cls({"id": id, "method": method, "params": params})
 
     @classmethod
-    def notification(cls, method, params):
+    def notification(cls, method: MethodName, params: dict):
         return cls({"method": method, "params": params})
 
     @classmethod
-    def response(cls, id, result, error):
+    def response(
+        cls, id: int, result: Optional[dict] = None, error: Optional[dict] = None
+    ):
         if error:
             return cls({"id": id, "error": error})
-        return cls(
-            {
-                "id": id,
-                "result": result,
-            }
-        )
+        return cls({"id": id, "result": result})
 
-    def dumps(self, *, as_bytes: bool = False):
+    def dumps(self, *, as_bytes: bool = False) -> Union[str, bytes]:
         """dump rpc message to json text"""
 
         self["jsonrpc"] = "2.0"
@@ -60,21 +53,21 @@ class RPCMessage(dict):
         return dumped
 
     @classmethod
-    def load(cls, data: Union[str, bytes]):
+    def load(cls, data: Union[str, bytes]) -> "RPCMessage":
         """load rpc message from json text"""
 
         loaded = json.loads(data)
         if loaded.get("jsonrpc") != "2.0":
-            raise ValueError("Not a JSON-RPC 2.0")
+            raise ValueError("JSON-RPC v2.0 is required")
         return cls(loaded)
 
 
-if os.name == "nt":
-    # if on Windows, hide process window
-    STARTUPINFO = subprocess.STARTUPINFO()
-    STARTUPINFO.dwFlags |= subprocess.SW_HIDE | subprocess.STARTF_USESHOWWINDOW
-else:
-    STARTUPINFO = None
+class Handler(ABC):
+    """Base handler"""
+
+    @abstractmethod
+    def handle(self, method: MethodName, params: dict) -> Optional[RPCMessage]:
+        """handle message"""
 
 
 class ServerNotRunning(Exception):
@@ -88,7 +81,8 @@ class HeaderError(ValueError):
 def wrap_rpc(content: bytes) -> bytes:
     """wrap content as rpc body"""
     header = b"Content-Length: %d\r\n" % len(content)
-    return b"%s\r\n%s" % (header, content)
+    separator = b"\r\n"
+    return b"%s%s%s" % (header, separator, content)
 
 
 @lru_cache(maxsize=512)
@@ -124,6 +118,14 @@ class Transport(ABC):
         """read data from server"""
 
 
+if os.name == "nt":
+    STARTUPINFO = subprocess.STARTUPINFO()
+    # Hide created process window
+    STARTUPINFO.dwFlags |= subprocess.SW_HIDE | subprocess.STARTF_USESHOWWINDOW
+else:
+    STARTUPINFO = None
+
+
 class StandardIO(Transport):
     """StandardIO Transport implementation"""
 
@@ -132,13 +134,13 @@ class StandardIO(Transport):
         self.cwd = cwd
 
         self._process: subprocess.Popen = None
-        self._run_event = threading.Event()
-
-        # make execution next to '(self._run_event).wait()' blocked
-        self._run_event.clear()
+        self._run_proces_event = threading.Event()
 
     def is_running(self):
-        return bool(self._process) and (self._process.poll() is None)
+        try:
+            return self._process.poll() is None
+        except AttributeError:
+            return False
 
     def run(self, env: Optional[dict] = None):
         print("execute '%s'" % shlex.join(self.command))
@@ -156,31 +158,34 @@ class StandardIO(Transport):
         )
 
         # ready to call 'Popen()' object
-        self._run_event.set()
+        self._run_proces_event.set()
 
-        thread = threading.Thread(target=self.listen_stderr)
+        thread = threading.Thread(target=self._listen_stderr_task)
         thread.start()
 
     @property
     def stdin(self):
-        if self._process:
+        try:
             return self._process.stdin
-        return BytesIO()
+        except AttributeError:
+            return BytesIO()
 
     @property
     def stdout(self):
-        if self.is_running():
+        try:
             return self._process.stdout
-        return BytesIO()
+        except AttributeError:
+            return BytesIO()
 
     @property
     def stderr(self):
-        if self.is_running():
+        try:
             return self._process.stderr
-        return BytesIO()
+        except AttributeError:
+            return BytesIO()
 
-    def listen_stderr(self):
-        self._run_event.wait()
+    def _listen_stderr_task(self):
+        self._run_proces_event.wait()
 
         prefix = f"[{self.command[0]}]"
         while bline := self.stderr.readline():
@@ -193,7 +198,7 @@ class StandardIO(Transport):
         """terminate process"""
 
         # reset state
-        self._run_event.clear()
+        self._run_proces_event.clear()
 
         if self._process:
             self._process.kill()
@@ -203,50 +208,46 @@ class StandardIO(Transport):
             self._process = None
 
     def write(self, data: bytes):
-        self._run_event.wait()
+        self._run_proces_event.wait()
 
         prepared_data = wrap_rpc(data)
         self.stdin.write(prepared_data)
         self.stdin.flush()
 
     def read(self):
-        self._run_event.wait()
+        self._run_proces_event.wait()
 
         # get header
-        temp_header = BytesIO()
-        n_header = 0
+        header_buffer = BytesIO()
+        header_separator = b"\r\n"
         while line := self.stdout.readline():
             # header and content separated by newline with \r\n
-            if line == b"\r\n":
+            if line == header_separator:
                 break
+            header_buffer.write(line)
 
-            n = temp_header.write(line)
-            n_header += n
+        header = header_buffer.getvalue()
 
         # no header received
-        if not n_header:
+        if not header:
             raise EOFError("stdout closed")
 
         try:
-            content_length = get_content_length(temp_header.getvalue())
-
+            defined_length = get_content_length(header)
         except HeaderError as err:
-            LOGGER.exception("header: %s", temp_header.getvalue())
+            LOGGER.exception("header: %s", header_buffer.getvalue())
             raise err
 
-        temp_content = BytesIO()
-        n_content = 0
+        content_buffer = BytesIO()
+        received_length = 0
         # Read until defined content_length received.
-        while n_content < content_length:
-            unread_length = content_length - n_content
-            if chunk := self.stdout.read(unread_length):
-                n = temp_content.write(chunk)
-                n_content += n
+        while (missing := defined_length - received_length) and missing > 0:
+            if chunk := self.stdout.read(missing):
+                received_length += content_buffer.write(chunk)
             else:
                 raise EOFError("stdout closed")
 
-        content = temp_content.getvalue()
-        return content
+        return content_buffer.getvalue()
 
 
 class Canceled(Exception):
@@ -257,13 +258,13 @@ class RequestManager:
     """RequestManager manage method mapped to request_id."""
 
     def __init__(self):
-        self.methods_map = {}
-        self.canceled_requests = set()
+        self.methods_map: Dict[int, MethodName] = {}
+        self.canceled_requests: Set[int] = set()
         self.request_count = 0
 
         self._lock = threading.Lock()
 
-    def add_method(self, method: str) -> int:
+    def add(self, method: MethodName) -> int:
         """add request method to request_map
 
         Return:
@@ -275,8 +276,8 @@ class RequestManager:
 
             return self.request_count
 
-    def get_method(self, request_id: int) -> str:
-        """get method paired with request_id
+    def pop(self, request_id: int) -> MethodName:
+        """pop method paired with request_id
 
         Return:
             method: str
@@ -293,31 +294,28 @@ class RequestManager:
             # pop() is simpler than get() and del
             return self.methods_map.pop(request_id)
 
-    def get_request_id(self, method: str) -> Optional[int]:
-        """get request_id paired with method
+    def _get_previous_request(self, method: MethodName) -> Optional[int]:
+        for req_id, meth in self.methods_map.items():
+            if meth == method:
+                return req_id
+
+        return None
+
+    def cancel(self, method: MethodName) -> Optional[int]:
+        """cancel request
 
         Return:
             request_id: Optional[int]
         """
 
         with self._lock:
-            for req_id, meth in self.methods_map.items():
-                if meth == method:
-                    return req_id
+            request_id = self._get_previous_request(method)
+            if request_id is None:
+                return None
 
-            return None
-
-    def mark_canceled(self, request_id: int):
-        """mark request as canceled"""
-
-        with self._lock:
-            try:
-                del self.methods_map[request_id]
-            except KeyError:
-                pass
-            else:
-                # mark canceled if 'request_id' in 'request_map'
-                self.canceled_requests.add(request_id)
+            del self.methods_map[request_id]
+            self.canceled_requests.add(request_id)
+            return request_id
 
 
 class Client:
@@ -325,24 +323,24 @@ class Client:
         self._transport = weakref.ref(transport, lambda x: self._reset_state())
         self._handler = weakref.ref(handler, lambda x: self._reset_state())
 
-        self.request_manager = RequestManager()
+        self._request_manager = RequestManager()
 
     @property
-    def transport(self):
+    def transport(self) -> Transport:
         return self._transport()
 
     @property
-    def handler(self):
+    def handler(self) -> Handler:
         return self._handler()
 
-    def _reset_state(self):
-        self.request_manager = RequestManager()
+    def _reset_state(self) -> None:
+        self._request_manager = RequestManager()
 
-    def send_message(self, message: RPCMessage):
+    def send_message(self, message: RPCMessage) -> None:
         content = message.dumps(as_bytes=True)
         self.transport.write(content)
 
-    def _listen(self):
+    def _listen_task(self) -> None:
         def listen_message() -> RPCMessage:
             if not self.transport:
                 raise EOFError("transport is closed")
@@ -374,41 +372,46 @@ class Client:
             except Exception:
                 LOGGER.exception("error handle message: %s", message, exc_info=True)
 
-    def listen(self):
-        thread = threading.Thread(target=self._listen, daemon=True)
+    def listen(self) -> None:
+        thread = threading.Thread(target=self._listen_task, daemon=True)
         thread.start()
 
-    def is_server_running(self):
-        return bool(self.transport) and self.transport.is_running()
+    def is_server_running(self) -> bool:
+        try:
+            return self.transport.is_running()
+        except AttributeError:
+            return False
 
-    def run_server(self, env: Optional[dict] = None):
+    def run_server(self, env: Optional[dict] = None) -> None:
         self.transport.run(env)
 
-    def terminate_server(self):
-        if self.transport:
+    def terminate_server(self) -> None:
+        try:
             self.transport.terminate()
+        except AttributeError:
+            pass
 
         self._reset_state()
 
-    def handle_message(self, message: RPCMessage):
+    def handle_message(self, message: RPCMessage) -> None:
         id = message.get("id")
 
         # handle server command
         method = message.get("method")
         if method:
             if id is None:
-                self.handle_notification(message)
+                self._handle_notification(message)
             else:
-                self.handle_request(message)
+                self._handle_request(message)
 
         # handle server response
         elif id is not None:
-            self.handle_response(message)
+            self._handle_response(message)
 
         else:
             LOGGER.error("invalid message: %s", message)
 
-    def handle_request(self, message: RPCMessage):
+    def _handle_request(self, message: RPCMessage) -> None:
         result = None
         error = None
         try:
@@ -419,15 +422,15 @@ class Client:
 
         self.send_response(message["id"], result, error)
 
-    def handle_notification(self, message: RPCMessage):
+    def _handle_notification(self, message: RPCMessage) -> None:
         try:
             self.handler.handle(message["method"], message["params"])
         except Exception as err:
             LOGGER.exception(err, exc_info=True)
 
-    def handle_response(self, message: RPCMessage):
+    def _handle_response(self, message: RPCMessage) -> None:
         try:
-            method = self.request_manager.get_method(message["id"])
+            method = self._request_manager.pop(message["id"])
         except Canceled:
             # ignore canceled response
             return
@@ -437,19 +440,18 @@ class Client:
         except Exception as err:
             LOGGER.exception(err, exc_info=True)
 
-    def send_request(self, method: str, params: dict):
+    def send_request(self, method: MethodName, params: dict) -> None:
         # cancel previous request with same method
-        if prev_request := self.request_manager.get_request_id(method):
-            self.request_manager.mark_canceled(prev_request)
+        if prev_request := self._request_manager.cancel(method):
             self.send_notification("$/cancelRequest", {"id": prev_request})
 
-        req_id = self.request_manager.add_method(method)
+        req_id = self._request_manager.add(method)
         self.send_message(RPCMessage.request(req_id, method, params))
 
-    def send_notification(self, method: str, params: dict):
+    def send_notification(self, method: MethodName, params: dict) -> None:
         self.send_message(RPCMessage.notification(method, params))
 
     def send_response(
         self, id: int, result: Optional[dict] = None, error: Optional[dict] = None
-    ):
+    ) -> None:
         self.send_message(RPCMessage.response(id, result, error))
