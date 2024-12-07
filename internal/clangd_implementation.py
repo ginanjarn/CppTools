@@ -92,34 +92,49 @@ class ClangdSession(Session):
         self.diagnostic_manager = DiagnosticManager(
             DiagnosticReportSettings(show_panel=False)
         )
-        self.hover_location = -1
+        self._set_default_handler()
 
-        self.handler_map.update(
-            {
-                "initialize": self.handle_initialize,
-                # window
-                "window/logMessage": self.handle_window_logmessage,
-                "window/showMessage": self.handle_window_showmessage,
-                # workspace
-                "workspace/applyEdit": self.handle_workspace_applyedit,
-                "workspace/executeCommand": self.handle_workspace_executecommand,
-                # textDocument
-                "textDocument/hover": self.handle_textdocument_hover,
-                "textDocument/completion": self.handle_textdocument_completion,
-                "textDocument/publishDiagnostics": self.handle_textdocument_publishdiagnostics,
-                "textDocument/formatting": self.handle_textdocument_formatting,
-                "textDocument/declaration": self.handle_textdocument_declaration,
-                "textDocument/definition": self.handle_textdocument_definition,
-                "textDocument/prepareRename": self.handle_textdocument_preparerename,
-                "textDocument/rename": self.handle_textdocument_rename,
-                "textDocument/codeAction": self.handle_textdocument_code_action,
-            }
-        )
+        # workspace status
+        self._initializing = False
+        self.hover_location = (0, 0)
 
-    def is_ready(self) -> bool:
+        # document target
+        self.action_target_map: Dict[lsp_client.MethodName, BufferedDocument] = {}
+        self.workspace = Workspace()
+
+    def _set_default_handler(self):
+        handlers = {
+            "initialize": self.handle_initialize,
+            # window
+            "window/logMessage": self.handle_window_logmessage,
+            "window/showMessage": self.handle_window_showmessage,
+            # workspace
+            "workspace/applyEdit": self.handle_workspace_applyedit,
+            "workspace/executeCommand": self.handle_workspace_executecommand,
+            # textDocument
+            "textDocument/hover": self.handle_textdocument_hover,
+            "textDocument/completion": self.handle_textdocument_completion,
+            "textDocument/publishDiagnostics": self.handle_textdocument_publishdiagnostics,
+            "textDocument/formatting": self.handle_textdocument_formatting,
+            "textDocument/declaration": self.handle_textdocument_declaration,
+            "textDocument/definition": self.handle_textdocument_definition,
+            "textDocument/prepareRename": self.handle_textdocument_preparerename,
+            "textDocument/rename": self.handle_textdocument_rename,
+            "textDocument/codeAction": self.handle_textdocument_code_action,
+        }
+        self.handler_map.update(handlers)
+
+    def _reset_state(self) -> None:
+        self._initializing = False
+        self.workspace = Workspace()
+
+        self.action_target_map.clear()
+        self.initialize_manager.done()
+
+    def _is_ready(self) -> bool:
         return self.client.is_server_running() and self.initialize_manager.is_begin()
 
-    def terminate(self):
+    def _terminate(self):
         """exit session"""
         self.client.terminate_server()
         self.diagnostic_manager.reset()

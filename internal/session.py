@@ -7,23 +7,15 @@ from typing import Optional, List, Dict, Callable, Any
 
 import sublime
 
-from . import lsp_client
-
 from .constant import PACKAGE_NAME, COMMAND_PREFIX
-from .document import (
-    BufferedDocument,
-    TextChange,
-)
+from .document import TextChange
 from .errors import MethodNotFound
-from .workspace import (
-    Workspace,
-    open_document,
-)
+from .lsp_client import Client, Transport, Handler, MethodName
+from .workspace import open_document
 
 PathStr = str
 PathEncodedStr = str
 """Path encoded '<file_name>:<row>:<column>'"""
-MethodName = str
 HandlerFunction = Callable[[str, dict], Any]
 RowColIndex = namedtuple("RowColIndex", ["row", "column"])
 
@@ -97,29 +89,18 @@ class DiagnosticPanel:
             window.destroy_output_panel(self.OUTPUT_PANEL_NAME)
 
 
-class Session(lsp_client.Handler):
+class Session(Handler):
     """Base handler"""
 
-    def __init__(self, transport: lsp_client.Transport):
-        self.client = lsp_client.Client(transport, self)
+    def __init__(self, transport: Transport):
+        self.client = Client(transport, self)
 
         # server message handler
         self.handler_map: Dict[MethodName, HandlerFunction] = {}
-        # document target
-        self.action_target_map: Dict[MethodName, BufferedDocument] = {}
-
-        # workspace status
-        self._initializing = False
-        self.workspace = Workspace()
-
         self.run_server_lock = threading.Lock()
 
-    def _reset_state(self) -> None:
-        self._initializing = False
-        self.workspace = Workspace()
-
-        self.action_target_map.clear()
-        self.session.done()
+    def reset_state(self):
+        self._reset_state()
 
     def handle(self, method: MethodName, params: dict) -> Optional[dict]:
         """"""
@@ -143,16 +124,18 @@ class Session(lsp_client.Handler):
                 sublime.status_message("running language server...")
                 # sometimes the server stop working
                 # we must reset the state before run server
-                self._reset_state()
+                self.reset_state()
 
                 self.client.run_server(env)
                 self.client.listen()
 
     def is_ready(self) -> bool:
-        raise NotImplementedError("is_ready")
+        """"""
+        return self._is_ready()
 
     def terminate(self):
-        raise NotImplementedError("terminate")
+        """"""
+        self._terminate()
 
     def initialize(self, view: sublime.View) -> None: ...
     def textdocument_didopen(
