@@ -14,7 +14,6 @@ import sublime
 
 from .constant import (
     LOGGING_CHANNEL,
-    PACKAGE_NAME,
     LANGUAGE_ID,
     VIEW_SELECTOR,
     COMMAND_PREFIX,
@@ -92,9 +91,9 @@ class UnbufferedDocument:
             self._cached_lines = self.text.splitlines(keepends=True)
         return self._cached_lines
 
-    def apply_text_changes(self, changes: List[TextChange]):
+    def apply_changes(self, text_changes: List[TextChange]):
         self.is_saved = False
-        self.text = self._update_text(self.text, changes)
+        self.text = self._update_text(self.text, text_changes)
 
     def _update_text(self, source: str, changes: List[TextChange]) -> str:
         text_changes = [self.to_text_change(c) for c in changes]
@@ -192,10 +191,10 @@ class BufferedDocument:
     def hide_completion(self):
         self.view.run_command("hide_auto_complete")
 
-    def apply_text_changes(self, changes: List[TextChange]):
+    def apply_changes(self, text_changes: List[TextChange]):
         self.view.run_command(
             f"{COMMAND_PREFIX}_apply_text_changes",
             {
-                "changes": [asdict(c) for c in changes],
+                "changes": [asdict(c) for c in text_changes],
             },
         )

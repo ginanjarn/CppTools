@@ -41,6 +41,7 @@ from .workspace import (
 PathStr = str
 PathEncodedStr = str
 """Path encoded '<file_name>:<row>:<column>'"""
+LineCharacter = namedtuple("LineCharacter", ["line", "character"])
 LOGGER = logging.getLogger(LOGGING_CHANNEL)
 
 
@@ -256,18 +257,6 @@ class ClangdSession(Session):
                 {"textDocument": {"uri": path_to_uri(document.file_name)}},
             )
 
-    def _text_change_to_rpc(self, text_change: TextChange) -> dict:
-        start = text_change.start
-        end = text_change.end
-        return {
-            "range": {
-                "end": {"character": end.column, "line": end.row},
-                "start": {"character": start.column, "line": start.row},
-            },
-            "rangeLength": text_change.length,
-            "text": text_change.text,
-        }
-
     @initialize_manager.must_begin
     def textdocument_didchange(self, view: sublime.View, changes: List[TextChange]):
         # Document can be related to multiple View but has same file_name.
@@ -278,7 +267,7 @@ class ClangdSession(Session):
             self.client.send_notification(
                 "textDocument/didChange",
                 {
-                    "contentChanges": [self._text_change_to_rpc(c) for c in changes],
+                    "contentChanges": [textchange_to_rpc(c) for c in changes],
                     "textDocument": {
                         "uri": path_to_uri(document.file_name),
                         "version": document.version,
@@ -366,7 +355,7 @@ class ClangdSession(Session):
         except KeyError:
             insert_text = text
 
-        # clangd defined 'label' starts with '<space>' or '•'
+        # clangd defined 'label' starts with '<space>' or 'ï¿½'
         signature = completion_item["label"][1:]
 
         # sublime text has complete the header bracket '<> or ""'
@@ -402,21 +391,6 @@ class ClangdSession(Session):
         for document in self.workspace.get_documents(file_name):
             self.diagnostic_manager.update(document.view, diagnostics)
 
-    @staticmethod
-    def _get_text_change(change: dict) -> TextChange:
-        start = change["range"]["start"]
-        end = change["range"]["end"]
-        text = change["newText"]
-        # "rangeLength" not implemented in clangd
-        length = 0
-
-        return TextChange(
-            (start["line"], start["character"]),
-            (end["line"], end["character"]),
-            text,
-            length,
-        )
-
     @initialize_manager.must_begin
     def textdocument_formatting(self, view):
         method = "textDocument/formatting"
@@ -435,12 +409,12 @@ class ClangdSession(Session):
         if error := params.get("error"):
             print(error["message"])
         elif result := params.get("result"):
-            changes = [self._get_text_change(c) for c in result]
-            self.action_target_map[method].apply_text_changes(changes)
+            changes = [rpc_to_textchange(c) for c in result]
+            self.action_target_map[method].apply_changes(changes)
 
     def handle_workspace_applyedit(self, params: dict) -> dict:
         try:
-            WorkspaceEdit(self.workspace).apply(params["edit"])
+            WorkspaceEdit(self.workspace).apply_changes(params["edit"])
 
         except Exception as err:
             LOGGER.error(err, exc_info=True)
@@ -566,7 +540,7 @@ class ClangdSession(Session):
         if error := params.get("error"):
             print(error["message"])
         elif result := params.get("result"):
-            WorkspaceEdit(self.workspace).apply(result)
+            WorkspaceEdit(self.workspace).apply_changes(result)
 
     @initialize_manager.must_begin
     def textdocument_code_action(self, view, start, end):
@@ -604,7 +578,7 @@ class ClangdSession(Session):
                 return
 
             edit = actions[index]["edit"]
-            WorkspaceEdit(self.workspace).apply(edit)
+            WorkspaceEdit(self.workspace).apply_changes(edit)
 
         def get_title(action: dict) -> str:
             title = action["title"]
@@ -614,6 +588,30 @@ class ClangdSession(Session):
 
         items = [get_title(a) for a in actions]
         sublime.active_window().show_quick_panel(items, on_select=on_select)
+
+
+def textchange_to_rpc(text_change: TextChange) -> dict:
+    """"""
+    start = text_change.start
+    end = text_change.end
+    return {
+        "range": {
+            "end": {"character": end.column, "line": end.row},
+            "start": {"character": start.column, "line": start.row},
+        },
+        "rangeLength": text_change.length,
+        "text": text_change.text,
+    }
+
+
+def rpc_to_textchange(change: dict) -> TextChange:
+    """"""
+    return TextChange(
+        LineCharacter(**change["range"]["start"]),
+        LineCharacter(**change["range"]["end"]),
+        change["newText"],
+        change.get("rangeLength", -1),
+    )
 
 
 class DiagnosticItem:
@@ -762,35 +760,20 @@ class WorkspaceEdit:
     def __init__(self, workspace_: Workspace):
         self.workspace = workspace_
 
-    def apply(self, edit_changes: dict) -> None:
+    def apply_changes(self, edit_changes: dict) -> None:
         """"""
         # Clangd implementation is a little different from standard
         for file_uri, changes in edit_changes["changes"].items():
             self._apply_textedit_changes(uri_to_path(file_uri), changes)
 
     def _apply_textedit_changes(self, file_name: PathStr, edits: dict):
-        changes = [self._get_text_change(c) for c in edits]
+        changes = [rpc_to_textchange(c) for c in edits]
 
         document = self.workspace.get_document_by_name(
             file_name, UnbufferedDocument(file_name)
         )
-        document.apply_text_changes(changes)
+        document.apply_changes(changes)
         document.save()
-
-    @staticmethod
-    def _get_text_change(change: dict) -> TextChange:
-        start = change["range"]["start"]
-        end = change["range"]["end"]
-        text = change["newText"]
-        # "rangeLength" not implemented in clangd
-        length = 0
-
-        return TextChange(
-            (start["line"], start["character"]),
-            (end["line"], end["character"]),
-            text,
-            length,
-        )
 
 
 def get_session() -> Session:
