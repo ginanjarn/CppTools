@@ -1,4 +1,4 @@
-"""pyserver spesific handler"""
+"""clangd implementation"""
 
 import logging
 import threading
@@ -18,8 +18,8 @@ from .constant import (
     COMMAND_PREFIX,
     LOGGING_CHANNEL,
 )
-from .handler import (
-    BaseHandler,
+from .session import (
+    Session,
     DiagnosticPanel,
     COMPLETION_KIND_MAP,
     input_text,
@@ -44,7 +44,7 @@ PathEncodedStr = str
 LOGGER = logging.getLogger(LOGGING_CHANNEL)
 
 
-class Session:
+class InitializeManager:
     def __init__(self):
         self.event = threading.Event()
 
@@ -82,10 +82,10 @@ class Session:
         return wrapper
 
 
-class ClangdHandler(BaseHandler):
+class ClangdSession(Session):
     """"""
 
-    session = Session()
+    initialize_manager = InitializeManager()
 
     def __init__(self, transport: lsp_client.Transport):
         super().__init__(transport)
@@ -117,7 +117,7 @@ class ClangdHandler(BaseHandler):
         )
 
     def is_ready(self) -> bool:
-        return self.client.is_server_running() and self.session.is_begin()
+        return self.client.is_server_running() and self.initialize_manager.is_begin()
 
     def terminate(self):
         """exit session"""
@@ -169,7 +169,7 @@ class ClangdHandler(BaseHandler):
         self._initializing = False
 
         self.diagnostic_manager.reset()
-        self.session.begin()
+        self.initialize_manager.begin()
 
     def handle_window_logmessage(self, params: dict):
         print(params["message"])
@@ -177,7 +177,7 @@ class ClangdHandler(BaseHandler):
     def handle_window_showmessage(self, params: dict):
         sublime.status_message(params["message"])
 
-    @session.wait_begin
+    @initialize_manager.wait_begin
     def textdocument_didopen(self, view: sublime.View, *, reload: bool = False):
         # check if view not closed
         if not (view and view.is_valid()):
@@ -213,7 +213,7 @@ class ClangdHandler(BaseHandler):
                 },
             )
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_didsave(self, view: sublime.View):
         if document := self.workspace.get_document(view):
             self.client.send_notification(
@@ -225,7 +225,7 @@ class ClangdHandler(BaseHandler):
             # untitled document not yet loaded to server
             self.textdocument_didopen(view)
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_didclose(self, view: sublime.View):
         file_name = view.file_name()
         self.diagnostic_manager.remove(view)
@@ -253,7 +253,7 @@ class ClangdHandler(BaseHandler):
             "text": text_change.text,
         }
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_didchange(self, view: sublime.View, changes: List[TextChange]):
         # Document can be related to multiple View but has same file_name.
         # Use get_document_by_name() because may be document already open
@@ -291,7 +291,7 @@ class ClangdHandler(BaseHandler):
         footer = f'***\n<a href="{command_url}">Code Action</a>'
         return f"{title}\n{diagnostic_message}\n{footer}"
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_hover(self, view, row, col):
         method = "textDocument/hover"
         # In multi row/column layout, new popup will created in current View,
@@ -329,7 +329,7 @@ class ClangdHandler(BaseHandler):
 
             self.action_target_map[method].show_popup(message, row, col)
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_completion(self, view, row, col):
         method = "textDocument/completion"
         if document := self.workspace.get_document(view):
@@ -351,7 +351,7 @@ class ClangdHandler(BaseHandler):
         except KeyError:
             insert_text = text
 
-        # clangd defined 'label' starts with '<space>' or 'â€¢'
+        # clangd defined 'label' starts with '<space>' or '•'
         signature = completion_item["label"][1:]
 
         # sublime text has complete the header bracket '<> or ""'
@@ -402,7 +402,7 @@ class ClangdHandler(BaseHandler):
             length,
         )
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_formatting(self, view):
         method = "textDocument/formatting"
         if document := self.workspace.get_document(view):
@@ -441,7 +441,7 @@ class ClangdHandler(BaseHandler):
 
         return None
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_declaration(self, view, row, col):
         method = "textDocument/declaration"
         if document := self.workspace.get_document(view):
@@ -463,7 +463,7 @@ class ClangdHandler(BaseHandler):
             locations = [self._build_location(l) for l in result]
             open_location(view, locations)
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_definition(self, view, row, col):
         method = "textDocument/definition"
         if document := self.workspace.get_document(view):
@@ -492,7 +492,7 @@ class ClangdHandler(BaseHandler):
             locations = [self._build_location(l) for l in result]
             open_location(view, locations)
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_preparerename(self, view, row, col):
         method = "textDocument/prepareRename"
         if document := self.workspace.get_document(view):
@@ -505,7 +505,7 @@ class ClangdHandler(BaseHandler):
                 },
             )
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_rename(self, view, row, col, new_name):
         method = "textDocument/rename"
         if document := self.workspace.get_document(view):
@@ -553,7 +553,7 @@ class ClangdHandler(BaseHandler):
         elif result := params.get("result"):
             WorkspaceEdit(self.workspace).apply(result)
 
-    @session.must_begin
+    @initialize_manager.must_begin
     def textdocument_code_action(self, view, start, end):
         method = "textDocument/codeAction"
         if document := self.workspace.get_document(view):
@@ -778,12 +778,12 @@ class WorkspaceEdit:
         )
 
 
-def get_handler() -> BaseHandler:
+def get_session() -> Session:
     """"""
 
     command = ["clangd", "--log=error", "--offset-encoding=utf-8"]
     transport = lsp_client.StandardIO(command, None)
-    return ClangdHandler(transport)
+    return ClangdSession(transport)
 
 
 def get_envs_settings() -> Optional[dict]:
@@ -793,5 +793,4 @@ def get_envs_settings() -> Optional[dict]:
         if envs := settings.get("envs"):
             return envs
 
-        sublime.active_window().run_command("pythontools_set_environment")
         return None

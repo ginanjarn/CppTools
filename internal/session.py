@@ -1,4 +1,4 @@
-"""handler"""
+"""session"""
 
 import threading
 from collections import defaultdict, namedtuple
@@ -97,7 +97,7 @@ class DiagnosticPanel:
             window.destroy_output_panel(self.OUTPUT_PANEL_NAME)
 
 
-class BaseHandler(lsp_client.Handler):
+class Session(lsp_client.Handler):
     """Base handler"""
 
     def __init__(self, transport: lsp_client.Transport):
