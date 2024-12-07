@@ -199,36 +199,3 @@ class BufferedDocument:
                 "changes": [asdict(c) for c in changes],
             },
         )
-
-    def highlight_text(self, regions: List[sublime.Region]):
-        highligter = TextHighlighter(self.view)
-        highligter.clear()
-        highligter.apply(regions)
-
-
-class TextHighlighter:
-    REGIONS_KEY = f"{PACKAGE_NAME}_REGIONS"
-
-    def __init__(self, view: sublime.View):
-        self.view = view
-
-    def apply(self, regions: List[sublime.Region]):
-        self.view.add_regions(
-            key=self.REGIONS_KEY,
-            regions=regions,
-            scope="invalid",
-            icon="dot",
-            flags=sublime.DRAW_NO_FILL
-            | sublime.DRAW_NO_OUTLINE
-            | sublime.DRAW_SQUIGGLY_UNDERLINE,
-        )
-
-    def clear(self):
-        self.view.erase_regions(TextHighlighter.REGIONS_KEY)
-
-    @staticmethod
-    def clear_all():
-        """clear all text hightlight"""
-        for window in sublime.windows():
-            for view in window.views(include_transient=True):
-                view.erase_regions(TextHighlighter.REGIONS_KEY)
