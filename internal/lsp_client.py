@@ -7,7 +7,6 @@ import re
 import threading
 import subprocess
 import shlex
-import weakref
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from io import BytesIO
@@ -320,18 +319,9 @@ class RequestManager:
 
 class Client:
     def __init__(self, transport: Transport, handler: Handler):
-        self._transport = weakref.ref(transport, lambda x: self._reset_state())
-        self._handler = weakref.ref(handler, lambda x: self._reset_state())
-
+        self.transport = transport
+        self.handler = handler
         self._request_manager = RequestManager()
-
-    @property
-    def transport(self) -> Transport:
-        return self._transport()
-
-    @property
-    def handler(self) -> Handler:
-        return self._handler()
 
     def _reset_state(self) -> None:
         self._request_manager = RequestManager()

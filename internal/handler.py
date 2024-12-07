@@ -101,8 +101,7 @@ class BaseHandler(lsp_client.Handler):
     """Base handler"""
 
     def __init__(self, transport: lsp_client.Transport):
-        self.transport = transport
-        self.client = lsp_client.Client(self.transport, self)
+        self.client = lsp_client.Client(transport, self)
 
         # server message handler
         self.handler_map: Dict[MethodName, HandlerFunction] = {}
