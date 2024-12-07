@@ -389,7 +389,7 @@ class ClangdSession(Session):
         diagnostics = params["diagnostics"]
 
         for document in self.workspace.get_documents(file_name):
-            self.diagnostic_manager.update(document.view, diagnostics)
+            self.diagnostic_manager.set(document.view, diagnostics)
 
     @initialize_manager.must_begin
     def textdocument_formatting(self, view):
@@ -636,12 +636,13 @@ class DiagnosticReportSettings:
 
 class DiagnosticManager:
     def __init__(self, settings: DiagnosticReportSettings = None) -> None:
-        self.settings = settings or DiagnosticReportSettings()
         self.diagnostics: Dict[sublime.View, List[dict]] = {}
-        self.active_view: sublime.View = None
+
+        self.settings = settings or DiagnosticReportSettings()
         self.panel = DiagnosticPanel()
 
         self._change_lock = threading.Lock()
+        self._active_view: sublime.View = None
         self._active_view_diagnostics: List[DiagnosticItem] = []
 
     def reset(self):
@@ -649,20 +650,19 @@ class DiagnosticManager:
         for view in self.diagnostics.keys():
             view.erase_regions(self.REGIONS_KEY)
 
-        self.diagnostics = {}
-        self.active_view = None
-        self.panel.destroy()
-
+        self._active_view = None
         self._active_view_diagnostics = []
+        self.panel.destroy()
+        self.diagnostics = {}
 
     def get(self, view: sublime.View) -> List[dict]:
         with self._change_lock:
             return self.diagnostics.get(view, [])
 
-    def update(self, view: sublime.View, diagostics: List[dict]):
+    def set(self, view: sublime.View, diagostics: List[dict]):
         with self._change_lock:
             self.diagnostics.update({view: diagostics})
-            self._on_diagnostic_changed()
+            self._on_diagnostic_changed(view)
 
     def remove(self, view: sublime.View):
         with self._change_lock:
@@ -670,58 +670,57 @@ class DiagnosticManager:
                 del self.diagnostics[view]
             except KeyError:
                 pass
-            self._on_diagnostic_changed()
+            self._on_diagnostic_changed(view)
 
     def set_active_view(self, view: sublime.View):
-        if view == self.active_view:
+        if view == self._active_view:
             return
 
-        self.active_view = view
-        self._on_diagnostic_changed()
+        self._active_view = view
+        self._on_diagnostic_changed(view)
 
     def get_active_view_diagnostics(
-        self, predicate: Callable[[DiagnosticItem], bool] = None
+        self, filter_func: Callable[[DiagnosticItem], bool] = None
     ) -> List[DiagnosticItem]:
-        if not predicate:
+        if not filter_func:
             return self._active_view_diagnostics
+        return [d for d in self._active_view_diagnostics if filter_func(d)]
 
-        return [d for d in self._active_view_diagnostics if predicate(d)]
+    def _on_diagnostic_changed(self, view: sublime.View):
+        diagnostics = [
+            self._to_diagnostic_item(view, diagnostic)
+            for diagnostic in self.diagnostics.get(view, [])
+        ]
 
-    LineCharacter = namedtuple("LineCharacter", ["line", "character"])
+        if self.settings.highlight_text:
+            self._highlight_regions(view, diagnostics)
+        if self.settings.show_status:
+            self._show_status(view, diagnostics)
+
+        if view != self._active_view:
+            return
+
+        self._active_view_diagnostics = diagnostics
+        if self.settings.show_panel:
+            self._show_panel(view, diagnostics)
 
     def _to_diagnostic_item(
         self, view: sublime.View, diagnostic: dict, /
     ) -> DiagnosticItem:
 
-        start = self.LineCharacter(**diagnostic["range"]["start"])
-        end = self.LineCharacter(**diagnostic["range"]["end"])
+        start = LineCharacter(**diagnostic["range"]["start"])
+        end = LineCharacter(**diagnostic["range"]["end"])
         region = sublime.Region(view.text_point(*start), view.text_point(*end))
         message = diagnostic["message"]
         if source := diagnostic.get("source"):
-            message += f" ({source})"
+            message = f"{message} ({source})"
 
         return DiagnosticItem(diagnostic["severity"], region, message)
 
-    def _update_active_view_diagnostics(self):
-        self._active_view_diagnostics = [
-            self._to_diagnostic_item(self.active_view, diagnostic)
-            for diagnostic in self.diagnostics.get(self.active_view, [])
-        ]
-
-    def _on_diagnostic_changed(self):
-        self._update_active_view_diagnostics()
-
-        if self.settings.highlight_text:
-            self._highlight_regions(self.active_view)
-        if self.settings.show_status:
-            self._show_status(self.active_view)
-        if self.settings.show_panel:
-            self._show_panel(self.active_view)
-
     REGIONS_KEY = f"{PACKAGE_NAME}_DIAGNOSTIC_REGIONS"
 
-    def _highlight_regions(self, view: sublime.View):
-        regions = [item.region for item in self._active_view_diagnostics]
+    def _highlight_regions(self, view: sublime.View, diagnostics: List[DiagnosticItem]):
+        regions = [item.region for item in diagnostics]
         view.add_regions(
             key=self.REGIONS_KEY,
             regions=regions,
@@ -734,23 +733,19 @@ class DiagnosticManager:
 
     STATUS_KEY = f"{PACKAGE_NAME}_DIAGNOSTIC_STATUS"
 
-    def _show_status(self, view: sublime.View):
+    def _show_status(self, view: sublime.View, diagnostics: List[DiagnosticItem]):
         value = "ERROR %s, WARNING %s"
-        err_count = len(
-            [item for item in self._active_view_diagnostics if item.severity == 1]
-        )
-        warn_count = len(self._active_view_diagnostics) - err_count
+        err_count = len([item for item in diagnostics if item.severity == 1])
+        warn_count = len(diagnostics) - err_count
         view.set_status(self.STATUS_KEY, value % (err_count, warn_count))
 
-    def _show_panel(self, view: sublime.View):
-        def wrap_location(view: sublime.View, item: DiagnosticItem):
+    def _show_panel(self, view: sublime.View, diagnostics: List[DiagnosticItem]):
+        def build_line(view: sublime.View, item: DiagnosticItem):
             short_name = Path(view.file_name()).name
             row, col = view.rowcol(item.region.begin())
             return f"{short_name}:{row+1}:{col} {item.message}"
 
-        content = "\n".join(
-            [wrap_location(view, item) for item in self._active_view_diagnostics]
-        )
+        content = "\n".join([build_line(view, item) for item in diagnostics])
         self.panel.set_content(content)
         self.panel.show()
 
