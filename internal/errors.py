@@ -1,54 +1,55 @@
-"""rpc errors definition"""
+"""rpc errors"""
+
+from typing import Union, Dict, Any, Optional
 
 
-class BaseRPCError(Exception):
-    code = -1
-    message = "error"
+class ContentIncomplete(ValueError):
+    """expected size less than defined"""
 
 
-class ParseError(BaseRPCError):
+class RPCException(Exception):
+    """base rpc exception"""
+
+    code = 0
+    message = ""
+
+
+class ParseError(RPCException):
     """message not comply to jsonrpc 2.0 specification"""
 
     code = -32700
     message = "parse error"
 
 
-class InvalidRequest(BaseRPCError):
+class InvalidRequest(RPCException):
     """invalid request"""
 
     code = -32600
     message = "invalid request"
 
 
-class MethodNotFound(BaseRPCError):
+class MethodNotFound(RPCException):
     """method not found"""
-
-    def __init__(self, name: str):
-        super().__init__(name)
-        self.name = name
-
-    def __repr__(self):
-        return f"MethodNotFound({self.name}!r)"
 
     code = -32601
     message = "method not found"
 
 
-class InvalidParams(BaseRPCError):
+class InvalidParams(RPCException):
     """invalid params"""
 
     code = -32602
     message = "invalid params"
 
 
-class InternalError(BaseRPCError):
+class InternalError(RPCException):
     """internal error"""
 
     code = -32603
     message = "internal error"
 
 
-class ServerNotInitialized(BaseRPCError):
+class ServerNotInitialized(RPCException):
     """workspace not initialize"""
 
     code = -32002
@@ -61,13 +62,42 @@ class InvalidResource(InternalError):
     message = "invalid resource"
 
 
-def transform_error(error: BaseRPCError) -> dict:
-    """transform error to rpc"""
+class RequestCancelled(RPCException):
+    """request canceled"""
+
+    message = "request canceled"
+    code = -32800
+
+
+class ContentModified(RPCException):
+    """content modified"""
+
+    message = "content modified"
+    code = -32801
+
+
+class FeatureDisabled(InternalError):
+    """feature disabled"""
+
+    message = "feature disabled"
+
+
+def transform_error(
+    error: Union[RPCException, Exception, None]
+) -> Optional[Dict[str, Any]]:
+    """transform exception to rpc error"""
 
     if not error:
         return None
 
-    if isinstance(error, BaseRPCError):
-        return {"message": error.message, "code": error.code}
+    code, message = None, None
+    try:
+        code = error.code
+        message = str(error) or error.message
 
-    return {"message": str(error), "code": 1}
+    except AttributeError:
+        # 'err.code' and 'err.message' may be not defined
+        code = InternalError.code
+        message = repr(error)
+
+    return {"code": code, "message": message}
