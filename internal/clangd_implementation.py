@@ -12,7 +12,6 @@ from typing import Optional, Dict, List, Callable
 
 import sublime
 
-from . import lsp_client
 from .constant import (
     PACKAGE_NAME,
     COMMAND_PREFIX,
@@ -32,6 +31,7 @@ from .document import (
     path_to_uri,
     uri_to_path,
 )
+from .lsp_client import Transport, StandardIO, MethodName, Response
 from .sublime_settings import Settings
 from .workspace import (
     Workspace,
@@ -88,7 +88,7 @@ class ClangdSession(Session):
 
     initialize_manager = InitializeManager()
 
-    def __init__(self, transport: lsp_client.Transport):
+    def __init__(self, transport: Transport):
         super().__init__(transport)
         self.diagnostic_manager = DiagnosticManager(
             DiagnosticReportSettings(show_panel=False)
@@ -100,7 +100,7 @@ class ClangdSession(Session):
         self.hover_location = (0, 0)
 
         # document target
-        self.action_target_map: Dict[lsp_client.MethodName, BufferedDocument] = {}
+        self.action_target_map: Dict[MethodName, BufferedDocument] = {}
         self.workspace = Workspace()
 
     def _set_default_handler(self):
@@ -176,8 +176,8 @@ class ClangdSession(Session):
             },
         )
 
-    def handle_initialize(self, params: dict):
-        if err := params.get("error"):
+    def handle_initialize(self, params: Response):
+        if err := params.error:
             print(err["message"])
             return
 
@@ -318,12 +318,12 @@ class ClangdSession(Session):
                 },
             )
 
-    def handle_textdocument_hover(self, params: dict):
+    def handle_textdocument_hover(self, params: Response):
         method = "textDocument/hover"
-        if err := params.get("error"):
+        if err := params.error:
             print(err["message"])
 
-        elif result := params.get("result"):
+        elif result := params.result:
             message = result["contents"]["value"]
             try:
                 start = result["range"]["start"]
@@ -375,12 +375,12 @@ class ClangdSession(Session):
             kind=kind,
         )
 
-    def handle_textdocument_completion(self, params: dict):
+    def handle_textdocument_completion(self, params: Response):
         method = "textDocument/completion"
-        if err := params.get("error"):
+        if err := params.error:
             print(err["message"])
 
-        elif result := params.get("result"):
+        elif result := params.result:
             items = [self._build_completion(item) for item in result["items"]]
             self.action_target_map[method].show_completion(items)
 
@@ -404,11 +404,11 @@ class ClangdSession(Session):
                 },
             )
 
-    def handle_textdocument_formatting(self, params: dict):
+    def handle_textdocument_formatting(self, params: Response):
         method = "textDocument/formatting"
-        if error := params.get("error"):
+        if error := params.error:
             print(error["message"])
-        elif result := params.get("result"):
+        elif result := params.result:
             changes = [rpc_to_textchange(c) for c in result]
             self.action_target_map[method].apply_changes(changes)
 
@@ -422,10 +422,10 @@ class ClangdSession(Session):
         else:
             return {"applied": True}
 
-    def handle_workspace_executecommand(self, params: dict) -> dict:
-        if error := params.get("error"):
+    def handle_workspace_executecommand(self, params: Response) -> dict:
+        if error := params.error:
             print(error["message"])
-        elif result := params.get("result"):
+        elif result := params.result:
             LOGGER.info(result)
 
         return None
@@ -443,11 +443,11 @@ class ClangdSession(Session):
                 },
             )
 
-    def handle_textdocument_declaration(self, params: dict):
+    def handle_textdocument_declaration(self, params: Response):
         method = "textDocument/declaration"
-        if error := params.get("error"):
+        if error := params.error:
             print(error["message"])
-        elif result := params.get("result"):
+        elif result := params.result:
             view = self.action_target_map[method].view
             locations = [self._build_location(l) for l in result]
             open_location(view, locations)
@@ -472,11 +472,11 @@ class ClangdSession(Session):
         col = location["range"]["start"]["character"]
         return f"{file_name}:{row+1}:{col+1}"
 
-    def handle_textdocument_definition(self, params: dict):
+    def handle_textdocument_definition(self, params: Response):
         method = "textDocument/definition"
-        if error := params.get("error"):
+        if error := params.error:
             print(error["message"])
-        elif result := params.get("result"):
+        elif result := params.result:
             view = self.action_target_map[method].view
             locations = [self._build_location(l) for l in result]
             open_location(view, locations)
@@ -530,16 +530,16 @@ class ClangdSession(Session):
 
         input_text("rename", old_name, request_rename)
 
-    def handle_textdocument_preparerename(self, params: dict):
-        if error := params.get("error"):
+    def handle_textdocument_preparerename(self, params: Response):
+        if error := params.error:
             print(error["message"])
-        elif result := params.get("result"):
+        elif result := params.result:
             self._handle_preparerename(result)
 
-    def handle_textdocument_rename(self, params: dict):
-        if error := params.get("error"):
+    def handle_textdocument_rename(self, params: Response):
+        if error := params.error:
             print(error["message"])
-        elif result := params.get("result"):
+        elif result := params.result:
             WorkspaceEdit(self.workspace).apply_changes(result)
 
     @initialize_manager.must_begin
@@ -562,10 +562,10 @@ class ClangdSession(Session):
                 },
             )
 
-    def handle_textdocument_code_action(self, params: dict):
-        if error := params.get("error"):
+    def handle_textdocument_code_action(self, params: Response):
+        if error := params.error:
             print(error["message"])
-        elif result := params.get("result"):
+        elif result := params.result:
             self._show_code_action(result)
 
     def _show_code_action(self, actions: List[dict]):
@@ -775,7 +775,7 @@ def get_session() -> Session:
     """"""
 
     command = ["clangd", "--log=error", "--offset-encoding=utf-8"]
-    transport = lsp_client.StandardIO(command, None)
+    transport = StandardIO(command, None)
     return ClangdSession(transport)
 
 

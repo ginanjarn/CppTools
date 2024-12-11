@@ -8,10 +8,11 @@ import threading
 import subprocess
 import shlex
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, asdict
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Set
+from typing import Optional, Union, List, Dict, Set, Any
 
 from . import errors
 from .constant import LOGGING_CHANNEL
@@ -23,49 +24,76 @@ class MethodName(str):
     """Method name"""
 
 
-class RPCMessage(dict):
-    """rpc message"""
+@dataclass
+class Message:
+    """JSON-RPC Message interface"""
 
-    @classmethod
-    def request(cls, id: int, method: MethodName, params: dict):
-        return cls({"id": id, "method": method, "params": params})
+    def get(self, name: str):
+        """for dict compatibility"""
+        return getattr(self, name)
 
-    @classmethod
-    def notification(cls, method: MethodName, params: dict):
-        return cls({"method": method, "params": params})
 
-    @classmethod
-    def response(
-        cls, id: int, result: Optional[dict] = None, error: Optional[dict] = None
-    ):
-        if error:
-            return cls({"id": id, "error": error})
-        return cls({"id": id, "result": result})
+@dataclass
+class Notification(Message):
+    method: MethodName
+    params: Union[dict, list]
 
-    def dumps(self, *, as_bytes: bool = False) -> Union[str, bytes]:
-        """dump rpc message to json text"""
 
-        self["jsonrpc"] = "2.0"
-        dumped = json.dumps(self)
-        if as_bytes:
-            return dumped.encode()
-        return dumped
+@dataclass
+class Request(Message):
+    id: int
+    method: MethodName
+    params: Union[dict, list]
 
-    @classmethod
-    def loads(cls, data: Union[str, bytes]) -> "RPCMessage":
-        """load rpc message from json text"""
 
-        loaded = json.loads(data)
-        if loaded.get("jsonrpc") != "2.0":
-            raise ValueError("JSON-RPC v2.0 is required")
-        return cls(loaded)
+@dataclass
+class Response(Message):
+    id: int
+    result: Optional[Union[dict, list]] = None
+    error: Optional[dict] = None
+
+
+def loads(json_str: Union[str, bytes]) -> Message:
+    """loads json-rpc message"""
+
+    dct = json.loads(json_str)
+    try:
+        if (jsonrpc_version := dct.pop("jsonrpc")) and jsonrpc_version != "2.0":
+            raise ValueError("invalid jsonrpc version")
+    except KeyError as err:
+        raise ValueError("JSON-RPC 2.0 is required") from err
+
+    if dct.get("method"):
+        id = dct.get("id")
+        if id is not None:
+            return Request(**dct)
+        return Notification(**dct)
+    return Response(**dct)
+
+
+def dumps(message: Message, as_bytes: bool = False) -> Union[str, bytes]:
+    """dumps json-rpc message"""
+
+    dct = asdict(message)
+    dct["jsonrpc"] = "2.0"
+
+    if isinstance(message, Response):
+        if message.error is None:
+            del dct["error"]
+        else:
+            del dct["result"]
+
+    json_str = json.dumps(dct)
+    if as_bytes:
+        return json_str.encode()
+    return json_str
 
 
 class Handler(ABC):
     """Base handler"""
 
     @abstractmethod
-    def handle(self, method: MethodName, params: dict) -> Optional[RPCMessage]:
+    def handle(self, method: MethodName, params: dict) -> Optional[Any]:
         """handle message"""
 
 
@@ -326,18 +354,18 @@ class Client:
     def _reset_state(self) -> None:
         self._request_manager = RequestManager()
 
-    def send_message(self, message: RPCMessage) -> None:
-        content = message.dumps(as_bytes=True)
+    def send_message(self, message: Message) -> None:
+        content = dumps(message, as_bytes=True)
         self.transport.write(content)
 
     def _listen_task(self) -> None:
-        def listen_message() -> RPCMessage:
+        def listen_message() -> Message:
             if not self.transport:
                 raise EOFError("transport is closed")
 
             content = self.transport.read()
             try:
-                message = RPCMessage.loads(content)
+                message = loads(content)
             except json.JSONDecodeError as err:
                 LOGGER.exception("content: '%s'", content)
                 raise err
@@ -383,44 +411,34 @@ class Client:
 
         self._reset_state()
 
-    def handle_message(self, message: RPCMessage) -> None:
-        id = message.get("id")
+    def handle_message(self, message: Message) -> None:
+        handler_map = {
+            Request: self._handle_request,
+            Response: self._handle_response,
+            Notification: self._handle_notification,
+        }
+        handler_map[type(message)](message)
 
-        # handle server command
-        method = message.get("method")
-        if method:
-            if id is None:
-                self._handle_notification(message)
-            else:
-                self._handle_request(message)
-
-        # handle server response
-        elif id is not None:
-            self._handle_response(message)
-
-        else:
-            LOGGER.error("invalid message: %s", message)
-
-    def _handle_request(self, message: RPCMessage) -> None:
+    def _handle_request(self, message: Request) -> None:
         result = None
         error = None
         try:
-            result = self.handler.handle(message["method"], message["params"])
+            result = self.handler.handle(message.method, message.params)
         except Exception as err:
             LOGGER.exception(err, exc_info=True)
             error = errors.transform_error(err)
 
-        self.send_response(message["id"], result, error)
+        self.send_response(message.id, result, error)
 
-    def _handle_notification(self, message: RPCMessage) -> None:
+    def _handle_notification(self, message: Notification) -> None:
         try:
-            self.handler.handle(message["method"], message["params"])
+            self.handler.handle(message.method, message.params)
         except Exception as err:
             LOGGER.exception(err, exc_info=True)
 
-    def _handle_response(self, message: RPCMessage) -> None:
+    def _handle_response(self, message: Response) -> None:
         try:
-            method = self._request_manager.pop(message["id"])
+            method = self._request_manager.pop(message.id)
         except Canceled:
             # ignore canceled response
             return
@@ -436,12 +454,12 @@ class Client:
             self.send_notification("$/cancelRequest", {"id": prev_request})
 
         req_id = self._request_manager.add(method)
-        self.send_message(RPCMessage.request(req_id, method, params))
+        self.send_message(Request(req_id, method, params))
 
     def send_notification(self, method: MethodName, params: dict) -> None:
-        self.send_message(RPCMessage.notification(method, params))
+        self.send_message(Notification(method, params))
 
     def send_response(
         self, id: int, result: Optional[dict] = None, error: Optional[dict] = None
     ) -> None:
-        self.send_message(RPCMessage.response(id, result, error))
+        self.send_message(Response(id, result, error))

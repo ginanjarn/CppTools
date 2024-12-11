@@ -3,19 +3,20 @@
 import threading
 from collections import defaultdict, namedtuple
 from dataclasses import asdict
-from typing import Optional, List, Dict, Callable, Any
+from typing import Optional, List, Dict, Callable, Any, Union
 
 import sublime
 
 from .constant import PACKAGE_NAME, COMMAND_PREFIX
 from .document import TextChange
 from .errors import MethodNotFound
-from .lsp_client import Client, Transport, Handler, MethodName
+from .lsp_client import Client, Transport, Handler, MethodName, Response
 from .workspace import open_document
 
 PathStr = str
 PathEncodedStr = str
 """Path encoded '<file_name>:<row>:<column>'"""
+Params = Union[Response, dict]
 HandlerFunction = Callable[[str, dict], Any]
 RowColIndex = namedtuple("RowColIndex", ["row", "column"])
 
@@ -102,7 +103,7 @@ class Session(Handler):
     def reset_state(self):
         self._reset_state()
 
-    def handle(self, method: MethodName, params: dict) -> Optional[dict]:
+    def handle(self, method: MethodName, params: Params) -> Optional[Any]:
         """"""
         try:
             func = self.handler_map[method]
