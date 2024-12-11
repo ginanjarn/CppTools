@@ -344,6 +344,13 @@ class RequestManager:
             self.canceled_requests.add(request_id)
             return request_id
 
+    def cancel_all(self) -> Optional[int]:
+        """cancel all request"""
+
+        with self._lock:
+            self.methods_map.clear()
+            self.canceled_requests.clear()
+
 
 class Client:
     def __init__(self, transport: Transport, handler: Handler):
@@ -439,7 +446,7 @@ class Client:
     def _handle_response(self, message: Response) -> None:
         try:
             method = self._request_manager.pop(message.id)
-        except Canceled:
+        except (Canceled, KeyError):
             # ignore canceled response
             return
 
@@ -457,6 +464,12 @@ class Client:
         self.send_message(Request(req_id, method, params))
 
     def send_notification(self, method: MethodName, params: dict) -> None:
+        if method in {
+            "textDocument/didOpen",
+            "textDocument/didChange",
+        }:
+            # cancel all current request
+            self._request_manager.cancel_all()
         self.send_message(Notification(method, params))
 
     def send_response(
