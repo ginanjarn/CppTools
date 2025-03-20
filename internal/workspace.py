@@ -1,73 +1,13 @@
 """Workspace module"""
 
-import logging
-import threading
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import List
 
 import sublime
 
-from .constant import LOGGING_CHANNEL
-from .document import BufferedDocument
+from .document import TextChange
 
 PathStr = str
-LOGGER = logging.getLogger(LOGGING_CHANNEL)
-
-
-class Workspace:
-    def __init__(self):
-        # Map document by view is easier to track if view is valid.
-        # If we map by file name, one document my related to multiple 'View'
-        # and some times the 'View' is invalid.
-        self.documents: Dict[sublime.View, BufferedDocument] = {}
-        self._lock = threading.Lock()
-
-    def reset(self):
-        """"""
-        with self._lock:
-            self.documents.clear()
-
-    def get_document(
-        self, view: sublime.View, /, default: Any = None
-    ) -> Optional[BufferedDocument]:
-        with self._lock:
-            return self.documents.get(view, default)
-
-    def add_document(self, document: BufferedDocument):
-        with self._lock:
-            self.documents[document.view] = document
-
-    def remove_document(self, view: sublime.View):
-        with self._lock:
-            try:
-                del self.documents[view]
-            except KeyError as err:
-                LOGGER.debug("document not found %s", err)
-                pass
-
-    def get_document_by_name(
-        self, file_name: PathStr, /, default: Any = None
-    ) -> Optional[BufferedDocument]:
-        """get document by name"""
-
-        with self._lock:
-            for view, document in self.documents.items():
-                if view.file_name() == file_name:
-                    return document
-            return default
-
-    def get_documents(
-        self, file_name: Optional[PathStr] = None
-    ) -> List[BufferedDocument]:
-        """get documents.
-        If file_name assigned, return documents with file_name filtered.
-        """
-        with self._lock:
-            if not file_name:
-                return [doc for _, doc in self.documents.items()]
-            return [
-                doc for _, doc in self.documents.items() if doc.file_name == file_name
-            ]
 
 
 def get_workspace_path(view: sublime.View, return_parent: bool = True) -> str:
@@ -98,13 +38,36 @@ def get_workspace_path(view: sublime.View, return_parent: bool = True) -> str:
     return str(Path(file_name).parent)
 
 
-def open_document(file_name: PathStr, preview: bool = False):
-    """open document"""
-    flags = sublime.ENCODED_POSITION
-    if preview:
-        flags |= sublime.TRANSIENT
+class FileUpdater:
+    def __init__(self, file_name: PathStr) -> None:
+        self.path = Path(file_name)
 
-    sublime.active_window().open_file(file_name, flags=flags)
+    def apply(self, changes: List[TextChange]) -> None:
+        old_text = self.path.read_text()
+        new_text = self._update_text(old_text, changes)
+        self.path.write_text(new_text)
+
+    def _get_offset(self, lines: List[str], row: int, column: int) -> int:
+        line_offset = sum([len(l) for l in lines[:row]])
+        return line_offset + column
+
+    def _update_text(self, source: str, changes: List[TextChange]) -> str:
+        temp = source
+
+        for change in changes:
+            lines = temp.splitlines(keepends=True)
+            start_offset = self._get_offset(lines, *change.start)
+            end_offset = self._get_offset(lines, *change.end)
+
+            temp = f"{temp[:start_offset]}{change.text}{temp[end_offset:]}"
+
+        return temp
+
+
+def update_document(file_name: PathStr, changes: List[TextChange]):
+    """update document"""
+    updater = FileUpdater(file_name)
+    updater.apply(changes)
 
 
 def create_document(file_name: PathStr, text: str = ""):

@@ -12,7 +12,7 @@ from dataclasses import dataclass, asdict
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Set, Any
+from typing import Optional, Union, List, Dict, Set
 
 from . import errors
 from .constant import LOGGING_CHANNEL
@@ -27,10 +27,6 @@ class MethodName(str):
 @dataclass
 class Message:
     """JSON-RPC Message interface"""
-
-    def get(self, name: str):
-        """for dict compatibility"""
-        return getattr(self, name)
 
 
 @dataclass
@@ -93,7 +89,9 @@ class Handler(ABC):
     """Base handler"""
 
     @abstractmethod
-    def handle(self, method: MethodName, params: dict) -> Optional[Any]:
+    def handle(
+        self, method: MethodName, params: Union[Message, dict]
+    ) -> Optional[Response]:
         """handle message"""
 
 
@@ -122,27 +120,15 @@ def get_content_length(header: bytes) -> int:
 
 
 class Transport(ABC):
-    """transport abstraction"""
-
-    @abstractmethod
-    def is_running(self) -> bool:
-        """check server is running"""
-
-    @abstractmethod
-    def run(self, env: Optional[dict] = None) -> None:
-        """run server"""
-
-    @abstractmethod
-    def terminate(self) -> None:
-        """terminate server"""
+    """Transport abstraction"""
 
     @abstractmethod
     def write(self, data: bytes) -> None:
-        """write data to server"""
+        """Write data to server"""
 
     @abstractmethod
     def read(self) -> bytes:
-        """read data from server"""
+        """Read data from server"""
 
 
 if os.name == "nt":
@@ -153,26 +139,43 @@ else:
     STARTUPINFO = None
 
 
-class StandardIO(Transport):
-    """StandardIO Transport implementation"""
+class ServerProcess:
+    """Server Process"""
 
     def __init__(self, command: List[str], cwd: Optional[Path] = None):
+        if not isinstance(command, list):
+            raise ValueError("command value must list of str")
+
         self.command = command
         self.cwd = cwd
 
-        self._process: subprocess.Popen = None
-        self._run_proces_event = threading.Event()
+        self.process: subprocess.Popen = None
+        self._run_event = threading.Event()
 
-    def is_running(self):
+        # Prevent run process until termination done
+        self._terminate_event = threading.Event()
+        self._terminate_event.set()
+
+    def is_running(self) -> bool:
+        """If process is running"""
         try:
-            return self._process.poll() is None
+            return self.process.poll() is None
         except AttributeError:
             return False
 
-    def run(self, env: Optional[dict] = None):
+    def wait_process_running(self) -> None:
+        """Wait process running"""
+        self._run_event.wait()
+
+    def run(self, env: Optional[dict] = None) -> None:
+        """Run process"""
+
+        # Wait if in termination process
+        self._terminate_event.wait()
+
         print("execute '%s'" % shlex.join(self.command))
 
-        self._process = subprocess.Popen(
+        self.process = subprocess.Popen(
             self.command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -184,70 +187,68 @@ class StandardIO(Transport):
             startupinfo=STARTUPINFO,
         )
 
-        # ready to call 'Popen()' object
-        self._run_proces_event.set()
+        # Ready to call 'Popen()' object
+        self._run_event.set()
 
         thread = threading.Thread(target=self._listen_stderr_task)
         thread.start()
 
     @property
     def stdin(self):
-        try:
-            return self._process.stdin
-        except AttributeError:
-            return BytesIO()
+        return self.process.stdin
 
     @property
     def stdout(self):
-        try:
-            return self._process.stdout
-        except AttributeError:
-            return BytesIO()
+        return self.process.stdout
 
     @property
     def stderr(self):
-        try:
-            return self._process.stderr
-        except AttributeError:
-            return BytesIO()
+        return self.process.stderr
 
     def _listen_stderr_task(self):
-        self._run_proces_event.wait()
-
         prefix = f"[{self.command[0]}]"
         while bline := self.stderr.readline():
             print(prefix, bline.rstrip().decode())
 
-        # else:
-        return
+        # Stderr return empty character, process is terminated
+        self._terminate_event.set()
 
-    def terminate(self):
-        """terminate process"""
+    def terminate(self) -> None:
+        """Terminate process"""
 
-        # reset state
-        self._run_proces_event.clear()
+        self._terminate_event.clear()
+        self._run_event.clear()
 
-        if self._process:
-            self._process.kill()
-            # wait until terminated
-            self._process.wait()
-            # set to None to release 'Popen()' object from memory
-            self._process = None
+        if not self.process:
+            return
+
+        self.process.kill()
+        return_code = self.process.wait()
+        print("process terminated with exit code", return_code)
+        # Set to None to release 'Popen()' object from memory
+        self.process = None
+
+
+class StandardIO(Transport):
+    """StandardIO Transport implementation"""
+
+    def __init__(self, server: ServerProcess) -> None:
+        self.server = server
 
     def write(self, data: bytes):
-        self._run_proces_event.wait()
+        self.server.wait_process_running()
 
         prepared_data = wrap_rpc(data)
-        self.stdin.write(prepared_data)
-        self.stdin.flush()
+        self.server.stdin.write(prepared_data)
+        self.server.stdin.flush()
 
     def read(self):
-        self._run_proces_event.wait()
+        self.server.wait_process_running()
 
         # get header
         header_buffer = BytesIO()
         header_separator = b"\r\n"
-        while line := self.stdout.readline():
+        while line := self.server.stdout.readline():
             # header and content separated by newline with \r\n
             if line == header_separator:
                 break
@@ -269,7 +270,7 @@ class StandardIO(Transport):
         received_length = 0
         # Read until defined content_length received.
         while (missing := defined_length - received_length) and missing > 0:
-            if chunk := self.stdout.read(missing):
+            if chunk := self.server.stdout.read(missing):
                 received_length += content_buffer.write(chunk)
             else:
                 raise EOFError("stdout closed")
@@ -344,7 +345,7 @@ class RequestManager:
             self.canceled_requests.add(request_id)
             return request_id
 
-    def cancel_all(self) -> Optional[int]:
+    def cancel_all(self):
         """cancel all request"""
 
         with self._lock:
@@ -353,12 +354,13 @@ class RequestManager:
 
 
 class Client:
-    def __init__(self, transport: Transport, handler: Handler):
+    def __init__(self, server: ServerProcess, transport: Transport, handler: Handler):
+        self.server = server
         self.transport = transport
         self.handler = handler
         self._request_manager = RequestManager()
 
-    def _reset_state(self) -> None:
+    def _reset_managers(self) -> None:
         self._request_manager = RequestManager()
 
     def send_message(self, message: Message) -> None:
@@ -367,9 +369,6 @@ class Client:
 
     def _listen_task(self) -> None:
         def listen_message() -> Message:
-            if not self.transport:
-                raise EOFError("transport is closed")
-
             content = self.transport.read()
             try:
                 message = loads(content)
@@ -389,7 +388,7 @@ class Client:
 
             except Exception as err:
                 LOGGER.exception(err, exc_info=True)
-                self.terminate_server()
+                self.server.terminate()
                 break
 
             try:
@@ -398,33 +397,18 @@ class Client:
                 LOGGER.exception("error handle message: %s", message, exc_info=True)
 
     def listen(self) -> None:
+        self._reset_managers()
+
         thread = threading.Thread(target=self._listen_task, daemon=True)
         thread.start()
 
-    def is_server_running(self) -> bool:
-        try:
-            return self.transport.is_running()
-        except AttributeError:
-            return False
-
-    def run_server(self, env: Optional[dict] = None) -> None:
-        self.transport.run(env)
-
-    def terminate_server(self) -> None:
-        try:
-            self.transport.terminate()
-        except AttributeError:
-            pass
-
-        self._reset_state()
-
     def handle_message(self, message: Message) -> None:
         handler_map = {
+            Notification: self._handle_notification,
             Request: self._handle_request,
             Response: self._handle_response,
-            Notification: self._handle_notification,
         }
-        handler_map[type(message)](message)
+        return handler_map[type(message)](message)
 
     def _handle_request(self, message: Request) -> None:
         result = None

@@ -4,11 +4,7 @@ import logging
 import time
 from collections import namedtuple
 from dataclasses import dataclass, asdict
-from functools import lru_cache
-from pathlib import Path
-from typing import List, Tuple
-from urllib.parse import urlparse, unquote_plus
-from urllib.request import url2pathname
+from typing import List
 
 import sublime
 
@@ -19,27 +15,8 @@ from .constant import (
     COMMAND_PREFIX,
 )
 
-PathStr = str
-DocumentURI = str
 RowColIndex = namedtuple("RowColIndex", ["row", "column"])
-Span = Tuple[int, int]
 LOGGER = logging.getLogger(LOGGING_CHANNEL)
-
-
-@lru_cache(128)
-def path_to_uri(path: PathStr) -> DocumentURI:
-    """convert path to uri"""
-    return Path(path).as_uri()
-
-
-@lru_cache(128)
-def uri_to_path(uri: DocumentURI) -> PathStr:
-    """convert uri to path"""
-    parsed = urlparse(uri)
-    if parsed.scheme != "file":
-        raise ValueError("url scheme must be 'file'")
-
-    return url2pathname(unquote_plus(parsed.path))
 
 
 def is_valid_document(view: sublime.View) -> bool:
@@ -63,69 +40,7 @@ class TextChange:
         self.end = RowColIndex(*self.end)
 
 
-class _UnbufferedTextChange:
-    __slots__ = ["span", "old_text", "new_text"]
-
-    def __init__(self, span: Span, old_text: str, new_text: str) -> None:
-        self.span = span
-        self.old_text = old_text
-        self.new_text = new_text
-
-    def offset_move(self) -> int:
-        return len(self.new_text) - len(self.old_text)
-
-    def get_moved_span(self, move: int) -> Span:
-        return (self.span[0] + move, self.span[1] + move)
-
-
-class UnbufferedDocument:
-    def __init__(self, file_name: PathStr):
-        self.file_name = file_name
-        self.text = Path(file_name).read_text()
-        self.is_saved = True
-
-        self._cached_lines = []
-
-    def lines(self) -> List[str]:
-        if not all([self.is_saved, self._cached_lines]):
-            self._cached_lines = self.text.splitlines(keepends=True)
-        return self._cached_lines
-
-    def apply_changes(self, text_changes: List[TextChange]):
-        self.is_saved = False
-        self.text = self._update_text(self.text, text_changes)
-
-    def _update_text(self, source: str, changes: List[TextChange]) -> str:
-        text_changes = [self.to_text_change(c) for c in changes]
-
-        temp = source
-        move = 0
-        for change in text_changes:
-            start_offset, end_offset = change.get_moved_span(move)
-            temp = f"{temp[:start_offset]}{change.new_text}{temp[end_offset:]}"
-            move += change.offset_move()
-
-        return temp
-
-    def calculate_offset(self, row: int, column: int) -> int:
-        line_offset = sum([len(l) for l in self.lines()[:row]])
-        return line_offset + column
-
-    def to_text_change(self, change: TextChange) -> _UnbufferedTextChange:
-        start = self.calculate_offset(*change.start)
-        end = self.calculate_offset(*change.end)
-
-        old_text = self.text[start:end]
-        new_text = change.text
-
-        return _UnbufferedTextChange((start, end), old_text, new_text)
-
-    def save(self):
-        Path(self.file_name).write_text(self.text)
-        self.is_saved = True
-
-
-class BufferedDocument:
+class Document:
     VIEW_SETTINGS = {
         "show_definitions": False,
         "auto_complete_use_index": False,
