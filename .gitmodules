@@ -1,0 +1,3 @@
+[submodule "language/plugin_core"]
+	path = language/plugin_core
+	url = https://github.com/ginanjarn/plugin_core.git
