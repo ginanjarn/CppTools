@@ -1,0 +1,26 @@
+[
+	{
+		"caption": "Cpp: Start server",
+		"command": "cpp_tools_start_server"
+	},
+	{
+		"caption": "Cpp: Terminate server",
+		"command": "cpp_tools_terminate_server"
+	},
+	{
+		"caption" : "Format Code",
+		"command" : "cpp_tools_document_formatting",
+	},
+	{
+		"caption" : "Show Definition",
+		"command" : "cpp_tools_goto_definition",
+	},
+	{
+		"caption" : "Code Action",
+		"command" : "cpp_tools_code_action",
+	},
+	{
+		"caption" : "Rename symbol...",
+		"command" : "cpp_tools_prepare_rename",
+	}
+]

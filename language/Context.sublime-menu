@@ -1,0 +1,35 @@
+[
+	{
+		"caption": "Format Code",
+		"command": "cpp_tools_document_formatting",
+		"id": "cpp_tools",
+		"mnemonic": "F"
+	},
+	{
+		"caption": "-",
+		"id": "cpp_tools"
+	},
+	{
+		"caption": "Show Definition",
+		"command": "cpp_tools_goto_definition",
+		"id": "cpp_tools",
+		"mnemonic": "i"
+	},
+	{
+		"caption": "-",
+		"id": "cpp_tools"
+	},
+	{
+		"caption": "Rename symbol...",
+		"command": "cpp_tools_prepare_rename",
+		"id": "cpp_tools",
+		"mnemonic": "R"
+	},
+	{
+		"caption": "Code Action...",
+		"command": "cpp_tools_code_action",
+		"args" : {"kinds": ["quickfix", "refactor"]},
+		"id": "cpp_tools",
+		"mnemonic": "A"
+	}
+]

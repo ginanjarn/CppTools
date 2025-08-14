@@ -1,0 +1,7 @@
+[
+	{ "keys": ["ctrl+alt+space"], "command": "cpp_tools_document_signature_help", "context":
+		[
+			{ "key": "selector", "operator": "equal", "operand": "source.c++"},
+		]
+	 },
+]
