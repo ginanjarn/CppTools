@@ -9,4 +9,7 @@
 	// File indexing parses all files in the sidebar, and builds an index of
 	// their symbols. This is required for Goto Definition to work.
 	"index_files": false,
+
+	// Controls what scopes auto complete will be triggered in
+	"auto_complete_selector": "source - comment - string.quoted - punctuation.terminator, meta.preprocessor",
 }
