@@ -20,7 +20,6 @@ from ..plugin_core.features.document.synchronizer import DocumentSynchronizerMix
 from ..plugin_core.features.document.definition import DocumentDefinitionMixins
 from ..plugin_core.features.document.diagnostics import DocumentDiagnosticsMixins
 from ..plugin_core.features.document.formatting import DocumentFormattingMixins
-from ..plugin_core.features.document.hover import DocumentHoverMixins
 from ..plugin_core.features.document.signature_help import DocumentSignatureHelpMixins
 
 from ..plugin_core.features.workspace.command import WorkspaceExecuteCommandMixins
@@ -28,6 +27,7 @@ from ..plugin_core.features.workspace.command import WorkspaceExecuteCommandMixi
 from ..plugin_core.features.window.message import WindowMessageMixins
 
 from .features.document.completion import ClangdDocumentCompletionMixins
+from .features.document.hover import ClangdDocumentHoverMixins
 from .features.document.rename import ClangdDocumentRenameMixins
 from .features.document.code_action import ClangdDocumentCodeActionMixins
 from .features.workspace.edit import ClangdWorkspaceApplyEditMixins
@@ -40,7 +40,7 @@ class ClangdClient(
     DocumentDefinitionMixins,
     DocumentDiagnosticsMixins,
     DocumentFormattingMixins,
-    DocumentHoverMixins,
+    ClangdDocumentHoverMixins,
     DocumentSignatureHelpMixins,
     WorkspaceExecuteCommandMixins,
     WindowMessageMixins,
