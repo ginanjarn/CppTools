@@ -21,4 +21,4 @@ class ClangdDocumentHoverMixins(DocumentHoverMixins):
             # show popup in trigger location
             message = response.result["contents"]["value"]
             row, col = self.trigger_location
-            self.hover_target.show_popup(message, row, col)
+            self.show_popup(self.hover_target.view, message, row, col)
