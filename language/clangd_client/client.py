@@ -1,12 +1,11 @@
 """client"""
 
 import logging
+import shlex
 
 from typing import Optional
 
-from ..constant import (
-    LOGGING_CHANNEL,
-)
+from ..constant import LOGGING_CHANNEL
 from ..plugin_core.transport import StandardIO
 from ..plugin_core.client import BaseClient, ServerArguments
 from ..plugin_core.sublime_settings import Settings
@@ -54,7 +53,8 @@ class ClangdClient(
 
 def get_client() -> ClangdClient:
     """"""
-    command = ["clangd"]
+    log = "error" if LOGGER.level in {logging.NOTSET, logging.ERROR} else "verbose"
+    command = shlex.split(f"clangd --log={log} --offset-encoding=utf-8")
     return ClangdClient(ServerArguments(command, None), StandardIO)
 
 
