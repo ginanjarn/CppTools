@@ -51,10 +51,16 @@ class ClangdClient(
     """Clangd Client"""
 
 
+def log_flags() -> str:
+    """return logging flag"""
+    if LOGGER.level == logging.DEBUG:
+        return "--log=verbose"
+    return "--log=error"
+
+
 def get_client() -> ClangdClient:
     """"""
-    log = "error" if LOGGER.level in {logging.NOTSET, logging.ERROR} else "verbose"
-    command = shlex.split(f"clangd --log={log} --offset-encoding=utf-8")
+    command = shlex.split(f"clangd --offset-encoding=utf-8 {log_flags()}")
     return ClangdClient(ServerArguments(command, None), StandardIO)
 
 

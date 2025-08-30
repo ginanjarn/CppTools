@@ -2,7 +2,7 @@
 
 import logging
 import time
-from functools import wraps
+from collections import defaultdict
 
 import sublime
 import sublime_plugin
@@ -37,78 +37,15 @@ from ..plugin_core.features.document.rename import (
 from ..plugin_core.features.document.code_action import _CodeActionCommand
 
 LOGGER = logging.getLogger(LOGGING_CHANNEL)
-CLIENT = get_client()
-
-_InitializeCommand.client = CLIENT
-_StartServerCommand.client = CLIENT
-_TerminateServerCommand.client = CLIENT
-DocumentSynchronizeEventListener.client = CLIENT
-DocumentSynchronizeTextChangeListener.client = CLIENT
-CompletionEventListener.client = CLIENT
-_DocumentSignatureHelpCommand.client = CLIENT
-DocumentSignatureHelpEventListener.client = CLIENT
-HoverEventListener.client = CLIENT
-_DocumentFormattingCommand.client = CLIENT
-_GotoDefinitionCommand.client = CLIENT
-_PrepareRenameCommand.client = CLIENT
-_RenameCommand.client = CLIENT
-_CodeActionCommand.client = CLIENT
-
-
-def setup_logger(level: int):
-    """"""
-    LOGGER.setLevel(level)
-    fmt = logging.Formatter("%(levelname)s %(filename)s:%(lineno)d  %(message)s")
-
-    sh = logging.StreamHandler()
-    sh.setFormatter(fmt)
-    LOGGER.addHandler(sh)
-
-
-def get_logging_settings():
-    """get logging level defined in '*.sublime-settings'"""
-    level_map = {
-        "error": logging.ERROR,
-        "warning": logging.WARNING,
-        "info": logging.INFO,
-        "verbose": logging.DEBUG,
-    }
-    with Settings() as settings:
-        settings_level = settings.get("logging")
-        return level_map.get(settings_level, logging.ERROR)
-
-
-def plugin_loaded():
-    """plugin entry point"""
-    setup_logger(get_logging_settings())
-
-
-def plugin_unloaded():
-    """executed before plugin unloaded"""
-    if CLIENT:
-        CLIENT.terminate()
-
-
-def client_must_ready(func):
-    """only call function if client is ready"""
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if not CLIENT.is_ready():
-            return None
-        return func(*args, **kwargs)
-
-    return wrapper
 
 
 class InitializerEventListener(sublime_plugin.EventListener):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.client = CLIENT
+    client = None
 
     def on_activated_async(self, view: sublime.View):
         if not is_valid_document(view):
+            return
+        if not self.client:
             return
         if self.client.is_ready():
             return
@@ -177,3 +114,72 @@ class CppToolsStartServerCommand(_StartServerCommand):
 
 class CppToolsTerminateServerCommand(_TerminateServerCommand):
     """CppToolsTerminateServerCommand"""
+
+
+def setup_logger():
+    """"""
+    level = _get_logging_settings()
+    LOGGER.setLevel(level)
+    fmt = logging.Formatter("%(levelname)s %(filename)s:%(lineno)d  %(message)s")
+
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    LOGGER.addHandler(sh)
+
+
+def _get_logging_settings():
+    """get logging level defined in '*.sublime-settings'"""
+    name_to_loglevel_map = defaultdict(
+        lambda: logging.NOTSET,
+        {
+            "error": logging.ERROR,
+            "warning": logging.WARNING,
+            "info": logging.INFO,
+            "debug": logging.DEBUG,
+        },
+    )
+    with Settings() as settings:
+        named_level = settings.get("logging_level", "")
+    return name_to_loglevel_map[str(named_level).lower()]
+
+
+# CLIENT SINGLETON
+CLIENT = None
+
+
+def setup_client():
+    """"""
+    global CLIENT
+    CLIENT = get_client()
+
+    for command_or_event in {
+        InitializerEventListener,
+        # ------------------------------
+        _InitializeCommand,
+        _StartServerCommand,
+        _TerminateServerCommand,
+        DocumentSynchronizeEventListener,
+        DocumentSynchronizeTextChangeListener,
+        CompletionEventListener,
+        _DocumentSignatureHelpCommand,
+        DocumentSignatureHelpEventListener,
+        HoverEventListener,
+        _DocumentFormattingCommand,
+        _GotoDefinitionCommand,
+        _PrepareRenameCommand,
+        _RenameCommand,
+        _CodeActionCommand,
+    }:
+        command_or_event.client = CLIENT
+
+
+def plugin_loaded():
+    """plugin entry point"""
+    setup_logger()
+    setup_client()
+
+
+def plugin_unloaded():
+    """executed before plugin unloaded"""
+    if CLIENT:
+        CLIENT.terminate()
